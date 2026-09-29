@@ -1,0 +1,4 @@
+services:
+  franka_humble:
+    build:
+      dockerfile: Dockerfile.host-proxy

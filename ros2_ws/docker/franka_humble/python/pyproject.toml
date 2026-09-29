@@ -1,0 +1,40 @@
+[project]
+name = "franka-humble-python"
+version = "0.1.0"
+description = "Container-only Python deps for the Humble Franka image. Not the host data-collect project."
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "numpy>=1.24,<2",
+    "crcmod>=1.7",
+    "pyserial>=3.5",
+    "pyyaml>=6.0.1",
+    "teleop-xr>=1.2.3",
+    "scipy>=1.10",
+    "websockets>=12.0",
+    "msgpack>=1.0.8",
+    # LeRobot 0.1.0 reloads timestamps with torch.stack(dataset["timestamp"]);
+    # datasets 5 returns a Column there and breaks reading saved episodes.
+    "datasets==3.6.0",
+    # Same revision as the host project: vr_collect.py writes LeRobot datasets
+    # from inside this container, so the dataset format must match the tooling
+    # in data_analysis/.
+    "lerobot @ git+https://github.com/huggingface/lerobot@0cf864870cf29f4738d3ade893e6fd13fbd7cdb5",
+    # Declared here so the CPU index below applies. lerobot needs torch for its
+    # dataset classes; inference itself runs on the GPU host.
+    "torch>=2.2.1",
+    "torchvision>=0.21.0",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+# This container has no GPU. The default PyPI wheels would add roughly 2.5 GB of
+# CUDA runtime libraries to the image.
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }

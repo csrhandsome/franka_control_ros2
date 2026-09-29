@@ -1,0 +1,14 @@
+# Must be merged last so it overrides Dockerfile.host-proxy.
+# Uses the already-built 2.5.1 image; does not rebuild franka_ros2.
+services:
+  franka_humble:
+    build:
+      context: .
+      dockerfile: Dockerfile.uv
+    image: data-collect/franka-ros2-humble:2.5.1-uv
+    environment:
+      UV_PROJECT: /workspace/data_collect/ros2_ws/docker/franka_humble/python
+      UV_PROJECT_ENVIRONMENT: /opt/uv/venv
+      VIRTUAL_ENV: /opt/uv/venv
+      UV_LINK_MODE: copy
+      UV_PYTHON: /usr/bin/python3

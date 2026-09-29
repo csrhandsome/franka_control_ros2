@@ -1,0 +1,65 @@
+# Namespace-agnostic ros2_control config for data_collect overlay controllers.
+# Replaces franka_bringup/config/controllers.yaml when launched via
+# data_collect_franka/franka_data_collect.launch.py.
+
+/**:
+  controller_manager:
+    ros__parameters:
+      update_rate: 1000
+      thread_priority: 98
+
+      cartesian_pose_target_controller:
+        type: data_collect_franka/CartesianPoseTargetController
+
+      joint_position_target_controller:
+        type: data_collect_franka/JointPositionTargetController
+
+      franka_robot_state_broadcaster:
+        type: franka_robot_state_broadcaster/FrankaRobotStateBroadcaster
+        state_interfaces:
+          robot_state
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      move_to_start_example_controller:
+        type: franka_example_controllers/MoveToStartExampleController
+
+/**:
+  cartesian_pose_target_controller:
+    ros__parameters:
+      arm_prefix: ""
+      filter_coeff: 0.35
+      collision_service_timeout_s: 1.0
+
+/**:
+  joint_position_target_controller:
+    ros__parameters:
+      arm_prefix: ""
+      robot_type: fr3
+      max_joint_velocity: 0.8
+
+/**:
+  franka_robot_state_broadcaster:
+    ros__parameters:
+      convenience_publish_rate: 1000
+
+/**:
+  move_to_start_example_controller:
+    ros__parameters:
+      k_gains:
+        - 600.0
+        - 600.0
+        - 600.0
+        - 600.0
+        - 250.0
+        - 150.0
+        - 50.0
+      d_gains:
+        - 30.0
+        - 30.0
+        - 30.0
+        - 30.0
+        - 10.0
+        - 10.0
+        - 5.0

@@ -1,0 +1,12 @@
+# USB / video overlay. Explicitly enabled via compose_devices.sh.
+# Does not use privileged mode.
+services:
+  franka_humble:
+    group_add:
+      - video
+      - plugdev
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      - "c 189:* rmw"
+      - "c 81:* rmw"

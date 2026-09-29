@@ -1,0 +1,6 @@
+# The local proxy listens on the host loopback address. BuildKit must use host
+# networking for RUN steps to reach it; runtime already uses host networking.
+services:
+  franka_humble:
+    build:
+      network: host

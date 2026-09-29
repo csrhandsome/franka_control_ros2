@@ -1,0 +1,7 @@
+# Persist overlay colcon build/install outside the official franka_ros2 workspace.
+services:
+  franka_humble:
+    volumes:
+      - overlay_ws:/opt/overlay_ws
+volumes:
+  overlay_ws:

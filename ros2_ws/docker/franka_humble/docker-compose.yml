@@ -1,0 +1,32 @@
+name: data-collect-franka
+
+services:
+  franka_humble:
+    build:
+      context: .
+      args:
+        USER_UID: ${USER_UID:?set USER_UID in .env}
+        USER_GID: ${USER_GID:?set USER_GID in .env}
+        FRANKA_ROS2_REF: v2.5.1
+    image: data-collect/franka-ros2-humble:2.5.1
+    # Required for direct FCI traffic and ROS 2 DDS; this does not grant host devices.
+    network_mode: host
+    ipc: host
+    init: true
+    tty: true
+    stdin_open: true
+    cap_add:
+      - SYS_NICE
+    ulimits:
+      rtprio: 99
+      rttime: -1
+      memlock: 8428281856
+    environment:
+      FRANKA_ROBOT_IP: ${FRANKA_ROBOT_IP:?set FRANKA_ROBOT_IP in .env}
+      FRANKA_INTERFACE: ${FRANKA_INTERFACE:-enp3s0}
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+    volumes:
+      # One shared business-code tree. ROS 2 and Python build output stay in the image.
+      - ${PROJECT_ROOT:?set PROJECT_ROOT in .env}:/workspace/data_collect:rw
+    working_dir: /workspace/data_collect

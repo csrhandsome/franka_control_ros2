@@ -1,0 +1,9 @@
+# Build-only overlay. Docker treats these as predefined proxy build arguments,
+# making them available to RUN commands without baking them into the final image.
+services:
+  franka_humble:
+    build:
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-http://127.0.0.1:7897}
+        HTTPS_PROXY: ${HTTPS_PROXY:-http://127.0.0.1:7897}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}

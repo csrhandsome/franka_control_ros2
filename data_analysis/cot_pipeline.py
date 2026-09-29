@@ -1,5 +1,3 @@
-"""现在这个有问题，ai老是觉得他自己是对的，要用openai的接口，也不想用我的silionflow的接口，坏的很"""
-
 from __future__ import annotations
 
 import argparse
@@ -11,7 +9,6 @@ from typing import Any
 
 import cv2
 from openai import OpenAI
-
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "data" / "config.json"
 

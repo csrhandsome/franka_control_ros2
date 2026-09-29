@@ -1,0 +1,16 @@
+<library path="data_collect_franka">
+  <class name="data_collect_franka/CartesianPoseTargetController"
+         type="data_collect_franka::CartesianPoseTargetController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Subscribe to PoseStamped and write filtered cartesian_pose_command.
+    </description>
+  </class>
+  <class name="data_collect_franka/JointPositionTargetController"
+         type="data_collect_franka::JointPositionTargetController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Subscribe to 7D joint targets and interpolate position commands.
+    </description>
+  </class>
+</library>

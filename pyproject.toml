@@ -1,0 +1,32 @@
+[project]
+name = "franka-ros2-collection"
+version = "0.1.0"
+description = "ROS 2 Franka collection, Human in the Loop control, and dataset tools"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "lerobot @ git+https://github.com/huggingface/lerobot@0cf864870cf29f4738d3ade893e6fd13fbd7cdb5",
+    "opencv-python>=4.13.0.92",
+    "pyyaml>=6.0.3",
+    "teleop-xr>=1.2.3",
+    "sounddevice>=0.5.5",
+    "silero-vad>=6.2.1",
+    "qwen-asr",
+    "numpy>=2",
+    "scipy>=1.10",
+    "websockets>=12",
+    "msgpack>=1.0.8",
+    "openai>=1",
+    "pandas>=2",
+    "matplotlib>=3.8",
+    "pyarrow>=15",
+    "tqdm>=4.66",
+]
+
+[tool.uv.sources]
+qwen-asr = { path = "third_party/Qwen3-ASR" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# ROS launch/ament plugins need lark and are irrelevant to these tests.
+addopts = "-p no:launch_testing -p no:launch_ros"

@@ -1,0 +1,11 @@
+# Serial overlay for the DH5 soft gripper. Combine with compose_devices.sh.
+# Fails to start if DH5_SERIAL_DEVICE does not exist on the host.
+services:
+  franka_humble:
+    group_add:
+      - dialout
+    devices:
+      - ${DH5_SERIAL_DEVICE:-/dev/ttyUSB0}:${DH5_SERIAL_DEVICE:-/dev/ttyUSB0}
+    device_cgroup_rules:
+      - "c 188:* rmw"
+      - "c 166:* rmw"

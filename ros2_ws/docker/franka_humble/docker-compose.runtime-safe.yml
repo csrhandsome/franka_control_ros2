@@ -1,0 +1,7 @@
+services:
+  franka_humble:
+    # Replace the image's original entrypoint without rebuilding its 1.5 GB
+    # layer.  This file is mounted read-only and does not expose robot devices.
+    entrypoint: ["/bin/bash", "/usr/local/bin/franka-entrypoint-safe"]
+    volumes:
+      - ./entrypoint-safe.sh:/usr/local/bin/franka-entrypoint-safe:ro
