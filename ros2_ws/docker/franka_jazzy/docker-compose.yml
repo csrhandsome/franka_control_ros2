@@ -1,0 +1,24 @@
+name: data-collect-franka-jazzy-experiment
+
+services:
+  franka_jazzy:
+    build:
+      context: .
+      network: host
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-http://127.0.0.1:7897}
+        HTTPS_PROXY: ${HTTPS_PROXY:-http://127.0.0.1:7897}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
+    image: data-collect/franka-jazzy-lerobot:0.6.1
+    network_mode: host
+    init: true
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      UV_PROJECT: /workspace/data_collect/ros2_ws/docker/franka_jazzy/python
+      UV_PROJECT_ENVIRONMENT: /opt/uv/venv
+      VIRTUAL_ENV: /opt/uv/venv
+      UV_PYTHON: /usr/bin/python3
+    volumes:
+      - ${PROJECT_ROOT:?set PROJECT_ROOT in .env}:/workspace/data_collect:ro
+    working_dir: /workspace/data_collect
