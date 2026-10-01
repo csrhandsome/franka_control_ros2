@@ -25,7 +25,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from control.util.audio_util import read_wav_pcm
-from data_analysis import lerobot_meta as meta
+from scripts.data_analysis import lerobot_meta as meta
 
 
 def load_dataset_info(dataset_path: Path) -> dict[str, Any]:

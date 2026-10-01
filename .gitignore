@@ -6,14 +6,22 @@ dist/
 wheels/
 *.egg-info
 
+# Cache and local config
+.ruff_cache/
+.pytest_cache/
+.claude/
+
 # Virtual environments
 .venv
 data/
 ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
-data_analysis/quality_reports
+
+# Credentials and generated artifacts
+scripts/modelscope/
+scripts/data_analysis/quality_reports/
 .codex
-scripts/data2modelscope.py
-scripts/modelscope2data.py
-scripts/modelscope2weights.py
+
+# Node.js
+node_modules/

@@ -17,8 +17,11 @@ from pathlib import Path
 
 from lerobot_fixture import build_lerobot_dataset
 
-from data_analysis import lerobot_meta as meta
-from data_analysis.episode_edit import delete_episode_by_id, delete_latest_episode
+from scripts.data_analysis import lerobot_meta as meta
+from scripts.data_analysis.episode_edit import (
+    delete_episode_by_id,
+    delete_latest_episode,
+)
 
 
 class _DatasetTestCase(unittest.TestCase):

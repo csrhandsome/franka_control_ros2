@@ -20,6 +20,29 @@ the wrapper for clients that only need ROS topics and the project mount;
 `compose_devices.sh` adds USB/video access for camera bringup. Both load the
 project's Compose overlays and `ros2_ws/docker/franka_humble/.env`.
 
+## Environments and responsibilities
+
+This repository keeps two separate Python environments, split by function so
+they do not install each other's dependencies:
+
+- **Collection runs in Docker.** The `franka_humble` image owns robot control,
+  cameras, VR teleoperation, LeRobot recording, and ROS inference. It carries its
+  own runtime at `/opt/uv/venv` (Python 3.10) plus the collection-only
+  dependencies — ROS, `teleop-xr`, `sounddevice`, `silero-vad`, `qwen-asr`, and
+  camera drivers. Collection commands never run on the host.
+- **Viewing and analysis run on the host.** The root Python 3.11 `.venv`
+  (created with `uv sync`) serves two offline jobs: the `replay/` workspace
+  (browse and inspect recorded episodes over HTTP) and `scripts/data_analysis/`
+  (quality checks, episode editing/merging, and audio tools). It installs
+  `lerobot` (read and validate LeRobot datasets) and `opencv-python` (decode and
+  view images), the replay stack (FastAPI, `pyarrow`, Pillow, `imageio-ffmpeg`),
+  and the analysis stack (NumPy, pandas, matplotlib) — but none of the ROS or
+  collection-only packages above.
+
+The Docker image does not install the replay/analysis web stack, and the host
+`.venv` does not install the ROS/collection stack. Model training and the policy
+WebSocket server remain in the separate `openpi-force` GPU environment.
+
 **Current startup blockers:** container checks found Python 3.11-only imports
 in the Python 3.10 Humble runtime. `vr_collect.py --help` fails on
 `typing.Self` in `control/soft_gripper_control_ros.py`; `inference_hitl.py --help`
@@ -399,8 +422,8 @@ checks do not verify FCI, live camera/VR input, or real-arm execution.
 | --- | --- |
 | `control/` | ROS arm, gripper, camera and VR adapters; collection recorder; HITL loop |
 | `config/{collect,inference,hitl}/` | Per-workflow robot YAML configuration |
-| `data_analysis/` | Offline dataset quality checks, episode editing/merging, and audio tools |
-| `scripts/` | Dataset/model transfer and instruction audio feature precomputation |
+| `scripts/data_analysis/` | Offline dataset quality checks, episode editing/merging, and audio tools |
+| `scripts/modelscope/` | ModelScope dataset/model transfer scripts (ignored; contains API credentials) |
 | `ros2_ws/src/data_collect_franka/` | ROS bringup, controllers, DH5 and camera nodes |
 | `ros2_ws/docker/` | Humble deployment runtime and isolated Jazzy experiment |
 | `tests/` | Unit/contract tests and synthetic Docker recording checks |

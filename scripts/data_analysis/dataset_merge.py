@@ -24,7 +24,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from data_analysis import lerobot_meta as meta
+from scripts.data_analysis import lerobot_meta as meta
 
 JSON = dict[str, Any]
 

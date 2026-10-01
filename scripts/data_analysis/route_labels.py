@@ -23,8 +23,8 @@ from typing import Any
 
 import numpy as np
 
-from data_analysis import lerobot_meta as meta
-from data_analysis.audio.window import (
+from scripts.data_analysis import lerobot_meta as meta
+from scripts.data_analysis.audio.window import (
     DEFAULT_POST_MARGIN_SEC,
     DEFAULT_PRE_MARGIN_SEC,
     build_imputed_instruction_audio_window,

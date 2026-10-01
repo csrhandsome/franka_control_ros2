@@ -1,4 +1,4 @@
-"""Run from repository root: uv run --project replay uvicorn replay.backend.main:app."""
+"""Run from repository root: uv run uvicorn replay.backend.main:app."""
 
 from pathlib import Path
 

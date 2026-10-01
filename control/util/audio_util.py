@@ -27,7 +27,7 @@ class EpisodeAudioSegment:
 def default_microphone_output_path(*, base_dir: Path | None = None) -> Path:
     timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d_%H%M%S")
     root = Path.cwd() if base_dir is None else Path(base_dir)
-    return root / "recordings" / f"microphone_{timestamp}.wav"
+    return root / "data" / "recordings" / f"microphone_{timestamp}.wav"
 
 
 def block_frames_for_sample_rate(

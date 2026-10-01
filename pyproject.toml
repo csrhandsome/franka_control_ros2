@@ -1,32 +1,36 @@
 [project]
 name = "franka-ros2-collection"
 version = "0.1.0"
-description = "ROS 2 Franka collection, Human in the Loop control, and dataset tools"
+description = "Host Python tools: LeRobot replay workspace and dataset analysis"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
-    "lerobot @ git+https://github.com/huggingface/lerobot@0cf864870cf29f4738d3ade893e6fd13fbd7cdb5",
-    "opencv-python>=4.13.0.92",
-    "pyyaml>=6.0.3",
-    "teleop-xr>=1.2.3",
-    "sounddevice>=0.5.5",
-    "silero-vad>=6.2.1",
-    "qwen-asr",
-    "numpy>=2",
-    "scipy>=1.10",
-    "websockets>=12",
-    "msgpack>=1.0.8",
-    "openai>=1",
+    "numpy>=2,<3",
     "pandas>=2",
     "matplotlib>=3.8",
-    "pyarrow>=15",
+    "pyarrow>=18,<24",
     "tqdm>=4.66",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+    "pillow>=11,<13",
+    "imageio-ffmpeg>=0.6,<1",
+    "opencv-python>=4.13.0.92",
+    "lerobot @ git+https://github.com/huggingface/lerobot@0cf864870cf29f4738d3ade893e6fd13fbd7cdb5",
 ]
 
-[tool.uv.sources]
-qwen-asr = { path = "third_party/Qwen3-ASR" }
+[dependency-groups]
+dev = ["pytest>=8,<10", "httpx>=0.28,<1", "ruff>=0.11,<1"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "replay/tests"]
+# Root hosts the `replay` and `scripts` namespace packages; put it on sys.path.
+pythonpath = ["."]
 # ROS launch/ament plugins need lark and are irrelevant to these tests.
 addopts = "-p no:launch_testing -p no:launch_ros"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

@@ -1,6 +1,6 @@
 """Inspect dataset metadata, EE samples, and video offsets without starting the API.
 
-From repository root: uv run --project replay python -m replay.scripts.inspect_dataset
+From repository root: uv run python -m replay.scripts.inspect_dataset
 replay/demo_data/demo_v30 --episode 1
 """
 

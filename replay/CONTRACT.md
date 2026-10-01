@@ -1,6 +1,6 @@
 # Replay integration contract
 
-All commands run from repository root. Python: `uv run --project replay ...`; Node: `pnpm --dir replay/frontend ...`. No ROS or Docker dependency.
+All commands run from repository root. Python: `uv run ...`; Node: `pnpm --dir replay/frontend ...`. No ROS or Docker dependency.
 
 Dataset root defaults to replay/demo_data; each child with meta/info.json is a dataset; child basename is dataset_id (demo_v21, demo_v30). REPLAY_DATA_ROOT can configure a directory of datasets or a single dataset. Never expose arbitrary paths via HTTP.
 

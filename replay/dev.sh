@@ -11,13 +11,13 @@ for replay_tool in uv pnpm setsid; do
   fi
 done
 
-uv sync --project replay
+uv sync
 pnpm --dir replay/frontend install --frozen-lockfile
 if [[ -z "${REPLAY_DATA_ROOT:-}" ]] && {
   [[ ! -f replay/demo_data/demo_v21/meta/info.json ]] ||
   [[ ! -f replay/demo_data/demo_v30/meta/info.json ]]
 }; then
-  env -u PYTHONPATH uv run --project replay python -m replay.scripts.generate_demo
+  env -u PYTHONPATH uv run python -m replay.scripts.generate_demo
 fi
 
 replay_api_pid=''
@@ -35,7 +35,7 @@ trap replay_stop EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-setsid env -u PYTHONPATH uv run --project replay uvicorn replay.backend.main:app \
+setsid env -u PYTHONPATH uv run uvicorn replay.backend.main:app \
   --host 127.0.0.1 --port 8000 &
 replay_api_pid=$!
 setsid pnpm --dir replay/frontend dev --host 127.0.0.1 --port 5173 --strictPort &

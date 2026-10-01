@@ -29,7 +29,7 @@ This is a headless, Linux-Docker configuration for an FR3-first setup. It pins:
 - `libfranka` `0.20.4` via the official `dependency.repos`
 - `franka_description` `2.8.1`
 
-Python in this image is managed with `uv`. The venv lives at `/opt/uv/venv` inside the image, not in `data_collect/.venv`. ROS Humble packages stay on the system interpreter and the venv uses `--system-site-packages` so `import rclpy` still works. The host project's Python 3.11 `pyproject.toml` is not used here.
+Python in this image is managed with `uv`. The venv lives at `/opt/uv/venv` inside the image, not in `data_collect/.venv`. ROS Humble packages stay on the system interpreter and the venv uses `--system-site-packages` so `import rclpy` still works. The image's `uv` project is kept under `/opt/uv/project`, independent of the host source tree.
 
 Use the wrapper so the uv overlay and the fixed entrypoint are both applied:
 

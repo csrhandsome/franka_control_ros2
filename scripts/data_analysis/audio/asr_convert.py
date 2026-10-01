@@ -40,7 +40,7 @@ import pyarrow.parquet as pq
 from tqdm import tqdm
 
 from control.util.audio_util import read_wav_pcm, transcribe_whisper_asr
-from data_analysis import lerobot_meta as meta
+from scripts.data_analysis import lerobot_meta as meta
 
 DEFAULT_HF_ENDPOINT = "https://hf-mirror.com"
 DEFAULT_INPUT_DIR = Path("data/openpi/franka_lerobot_4_9_audio")

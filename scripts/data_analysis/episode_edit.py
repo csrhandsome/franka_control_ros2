@@ -39,8 +39,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from data_analysis import lerobot_meta as meta
-from data_analysis.lerobot_meta import EpisodeInfo
+from scripts.data_analysis import lerobot_meta as meta
+from scripts.data_analysis.lerobot_meta import EpisodeInfo
 
 
 @dataclass(frozen=True)

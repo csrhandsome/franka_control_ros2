@@ -32,8 +32,8 @@ from typing import Any
 import numpy as np
 
 from control.util.audio_util import read_wav_pcm
-from data_analysis import lerobot_meta as meta
-from data_analysis.audio.window import (
+from scripts.data_analysis import lerobot_meta as meta
+from scripts.data_analysis.audio.window import (
     DEFAULT_POST_MARGIN_SEC,
     DEFAULT_PRE_MARGIN_SEC,
     refresh_dataset_instruction_audio_windows,

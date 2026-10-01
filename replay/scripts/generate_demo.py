@@ -1,6 +1,6 @@
 """Generate matching LeRobot v2.1/v3.0 fixtures with browser-playable H264 cameras.
 
-Run from repository root: uv run --project replay python -m replay.scripts.generate_demo
+Run from repository root: uv run python -m replay.scripts.generate_demo
 """
 
 from __future__ import annotations

@@ -13,12 +13,12 @@
 也可以分开启动，便于调试：
 
 ```bash
-uv sync --project replay
-env -u PYTHONPATH uv run --project replay python -m replay.scripts.generate_demo
+uv sync
+env -u PYTHONPATH uv run python -m replay.scripts.generate_demo
 pnpm --dir replay/frontend install --frozen-lockfile
 
 # 终端 1，工作目录为仓库根目录
-env -u PYTHONPATH uv run --project replay uvicorn replay.backend.main:app --reload --host 127.0.0.1 --port 8000
+env -u PYTHONPATH uv run uvicorn replay.backend.main:app --reload --host 127.0.0.1 --port 8000
 
 # 终端 2，工作目录为仓库根目录
 pnpm --dir replay/frontend dev --host 127.0.0.1
@@ -41,11 +41,11 @@ pnpm --dir replay/frontend dev --host 127.0.0.1
 
 ```bash
 # 生成 / 重新生成专用演示数据
-env -u PYTHONPATH uv run --project replay python -m replay.scripts.generate_demo
+env -u PYTHONPATH uv run python -m replay.scripts.generate_demo
 
 # 查看数据集结构和字段
-env -u PYTHONPATH uv run --project replay python -m replay.scripts.inspect_dataset replay/demo_data/demo_v21
-env -u PYTHONPATH uv run --project replay python -m replay.scripts.inspect_dataset replay/demo_data/demo_v30 --episode 1
+env -u PYTHONPATH uv run python -m replay.scripts.inspect_dataset replay/demo_data/demo_v21
+env -u PYTHONPATH uv run python -m replay.scripts.inspect_dataset replay/demo_data/demo_v30 --episode 1
 ```
 
 配置自己的本地数据：
@@ -85,10 +85,10 @@ replay/
 一键按顺序验证：`./replay/check.sh`。也可以先验证两种假数据的读取，再验证后端接口，最后构建前端：
 
 ```bash
-env -u PYTHONPATH PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run --project replay pytest replay/tests/test_readers.py -q
-env -u PYTHONPATH PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run --project replay pytest replay/tests/test_api.py -q
+env -u PYTHONPATH PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest replay/tests/test_readers.py -q
+env -u PYTHONPATH PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest replay/tests/test_api.py -q
 pnpm --dir replay/frontend build
-env -u PYTHONPATH uv run --project replay ruff check replay
+env -u PYTHONPATH uv run ruff check replay
 ```
 
 测试使用临时合成数据，不修改已有真实数据。命令清除宿主机的 `PYTHONPATH`，并禁用 pytest 插件自动加载，避免 ROS shell 环境影响独立 uv 项目。重点检查 v3 共享文件中的 episode 隔离、视频偏移、EE 降采样首尾点、缺失字段 / 文件、路径约束，以及视频 HTTP Range 响应。

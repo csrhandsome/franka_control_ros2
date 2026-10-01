@@ -11,6 +11,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+
 from replay.scripts._common import MissingDatasetFile
 from replay.scripts.generate_demo import generate_demo
 from replay.scripts.inspect_dataset import inspect_dataset

@@ -16,8 +16,8 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-from data_analysis import lerobot_meta as meta
-from data_analysis.lerobot_meta import safe_float
+from scripts.data_analysis import lerobot_meta as meta
+from scripts.data_analysis.lerobot_meta import safe_float
 
 DEFAULT_PRE_MARGIN_SEC = 0.2
 DEFAULT_POST_MARGIN_SEC = 0.4
