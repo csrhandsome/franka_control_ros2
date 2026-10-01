@@ -1,0 +1,65 @@
+export interface DataFeature {
+  key: string
+  label: string
+  kind: 'video' | 'ee' | 'unsupported'
+  dtype: string
+  shape: number[]
+  names: string[] | null
+}
+
+export interface DatasetSummary {
+  id: string
+  name: string
+  version: string
+  robot_type: string | null
+  fps: number
+  total_episodes: number
+  total_frames: number
+}
+
+export interface EpisodeSummary {
+  episode_index: number
+  length: number
+  duration_s: number
+  tasks: string[]
+}
+
+export interface DatasetDetail extends DatasetSummary {
+  features: DataFeature[]
+  episodes: EpisodeSummary[]
+}
+
+export interface EpisodeDetail extends EpisodeSummary {
+  dataset_id: string
+  blocks: DataFeature[]
+}
+
+export interface EEData {
+  dataset_id: string
+  episode_index: number
+  feature: string
+  names: string[]
+  units: string[]
+  timestamps: number[]
+  values: number[][]
+  point_count: number
+  total_points: number
+  bounds: { min: number[]; max: number[] }
+}
+
+export interface VideoData {
+  dataset_id: string
+  episode_index: number
+  feature: string
+  url: string
+  start_time_s: number
+  end_time_s: number
+  duration_s: number
+  fps: number
+}
+
+export interface DragFeature {
+  datasetId: string
+  episodeIndex: number
+  feature: string
+}

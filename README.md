@@ -1,32 +1,76 @@
 # Franka ROS 2 collection and Human in the Loop control
 
-The repository root holds three entry points: `vr_collect.py` (VR teleoperation
-demonstrations), `vr_hitl_inference.py` (policy rollouts with optional VR
-takeover and recording), and `inference.py` (plain 30 Hz policy inference,
-without recording). Everything else lives under `control/`, `config/`,
-`data_analysis/`, `scripts/`, or `ros2_ws/`.
+The normal collection command is `./collect.sh`. It manages the ROS bringup,
+VR publisher, and `vr_collect.py` containers together.
+
+| Entry point | Purpose | Configuration |
+| --- | --- | --- |
+| `./collect.sh` / `vr_collect.py` | VR teleoperation and LeRobot recording | `config/collect/franka.yaml` |
+| `inference.py` | 30 Hz EE policy inference or Force RLT, without recording | `config/inference/franka.yaml` |
+| `inference_hitl.py` | Policy rollouts with VR takeover and branch recording | `config/hitl/franka.yaml` |
+
+Robot control, collection, camera access, and ROS inference run in the
+`franka_humble` Docker image, with Python 3.10 at `/opt/uv/venv`. The repository
+is mounted at `/workspace/data_collect`; the host `.venv` is a separate
+environment for offline tools. Model training and the policy WebSocket server
+run separately in the `openpi-force` GPU environment.
+
+Run the Docker commands below from the repository root. `compose_safe.sh` is
+the wrapper for clients that only need ROS topics and the project mount;
+`compose_devices.sh` adds USB/video access for camera bringup. Both load the
+project's Compose overlays and `ros2_ws/docker/franka_humble/.env`.
+
+**Current startup blockers:** container checks found Python 3.11-only imports
+in the Python 3.10 Humble runtime. `vr_collect.py --help` fails on
+`typing.Self` in `control/soft_gripper_control_ros.py`; `inference_hitl.py --help`
+fails on `datetime.UTC` in `control/hitl/recording.py`. Plain inference also
+imports the HITL package during startup and reaches the same `datetime.UTC`
+error, although `inference.py --help` succeeds. Resolve these imports before
+running collection or inference; the commands below describe the intended
+workflow. Python 3.10-compatible alternatives are `typing_extensions.Self`
+and `datetime.timezone.utc`.
 
 ## 在 Docker 中采集 LeRobot 数据
 
 采集入口统一为 `vr_collect.py`。通过 `dataset.lerobot_format: v2 | v3`
 选择数据格式，也可用 `--lerobot-format` 临时覆盖：v2 对应 Humble 镜像中的
-LeRobot 0.1，v3 对应 Jazzy 镜像中的 LeRobot 0.6.1。Jazzy 的合成记录验证
-命令和当前运行范围见
-[`ros2_ws/docker/franka_jazzy/README.md`](ros2_ws/docker/franka_jazzy/README.md)。
+固定 LeRobot 0.1 版本，v3 对应独立 Jazzy 镜像中的 LeRobot 0.6.1。
+`./collect.sh` 只支持 Humble / v2；Jazzy / v3 目前用于合成验证，尚不能直接
+启动真机采集。两种格式共用采集接口和核心字段，切换格式时需使用新的
+`dataset.repo_id` 或 `dataset.date`。
 
 采集容器使用 ROS 2 Humble、固定版本的 LeRobot 和 CPU 版 PyTorch，直接写入
-LeRobot 数据集；模型推理和训练可在本机 GPU 环境运行。以下命令均在仓库根目录执行。
+LeRobot 数据集；神经网络和训练在独立 GPU 环境运行，ROS 推理客户端仍在
+Humble 容器中运行。以下命令均在仓库根目录执行。
 首次使用时，从 `ros2_ws/docker/franka_humble/.env.example` 复制 `.env`，并填写
 实际的机器人 IP、网卡及用户 UID/GID。
 
 ```bash
 test -f ros2_ws/docker/franka_humble/.env || cp ros2_ws/docker/franka_humble/.env.example ros2_ws/docker/franka_humble/.env
+```
+
+核对 `.env` 中的 `FRANKA_ROBOT_IP`、`FRANKA_INTERFACE`、`USER_UID`、
+`USER_GID`、`PROJECT_ROOT` 和 `ROS_DOMAIN_ID`。如果尚无基础镜像
+`data-collect/franka-ros2-humble:2.5.1`，先构建它：
+
+```bash
+bash ros2_ws/docker/franka_humble/scripts/compose.sh build franka_humble
+```
+
+再构建 uv 运行镜像和 ROS overlay，并检查环境：
+
+```bash
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh build franka_humble
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble bash ros2_ws/docker/franka_humble/scripts/build_overlay.sh
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble uv-env-smoke-test
+```
+
+合成采集检查命令如下；应在修复上述 Python 3.10 兼容性问题后执行：
+
+```bash
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble python tests/docker_dataset_adapter_smoke.py --format v2
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble python tests/docker_recording_smoke.py
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble python tests/docker_collect_pipeline_smoke.py
-bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble bash ros2_ws/docker/franka_humble/scripts/build_overlay.sh
 ```
 
 采集检查验证统一数据集接口、LeRobot episode 的写入/回读，以及
@@ -34,14 +78,34 @@ bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble
 `config/collect/franka.yaml`：`dataset.enable_logging: true`、
 `camera.camera_backend: ros`、`robot.use_fake_hardware: false`，将
 `dataset.date` 设为本次采集标识，并核对两路相机序列号和话题。配置完成且
-镜像与 ROS overlay 已构建后，在仓库根目录运行 `./collect.sh`，一次启动
-控制器、VR 话题和录制进程；按 Ctrl+C 会停止对应容器。脚本读取
-`config/collect/franka.yaml`，也可传入仓库内的其他采集配置路径。当前 YAML
+镜像与 ROS overlay 已构建后，在仓库根目录运行以下命令，一次启动
+控制器、VR 话题和录制进程；按 Ctrl+C 会停止对应容器：
+
+```bash
+./collect.sh
+# 使用仓库内的其他配置时，将路径替换为实际文件。
+./collect.sh config/collect/franka.yaml
+```
+
+脚本读取 `config/collect/franka.yaml`，也可传入仓库内的其他采集配置路径。当前 YAML
 启用真实硬件、相机和数据保存，运行前必须逐项核对。`dataset.action_space: ee`
 保存 7D 的末端位姿加夹爪动作；改为 `joint` 则保存 8D 的关节角加夹爪动作。
 切换动作空间后请更换 `dataset.date`。
+`control.control_mode` 选择控制模式，与记录动作的 `dataset.action_space`
+是两个独立配置。只调试假硬件时，应在采集配置中明确设置
+`robot.use_fake_hardware: true`、`camera.camera_backend: none` 和
+`dataset.enable_logging: false`。
 `./collect.sh` 目前只启动 Humble 运行环境，因此要求 `dataset.lerobot_format: v2`；
 Jazzy 镜像当前只完成合成记录验证，尚无机器人 bringup。
+
+长按双手扳机约 0.5 秒启用运动，右手位姿控制末端；松开并再次长按会重新
+锚定 VR 零位。右手 A/B 分别关闭/打开夹爪；检测到运动或夹爪动作后自动
+开始录制。采集进程启动时会打开夹爪并移动到配置的起始关节位置。
+
+使用 DH5 时，设置 `gripper.gripper_type: dh5`，核对
+`gripper.soft_gripper_port`、夹爪相机话题及 `.env` 中的
+`DH5_SERIAL_DEVICE`。`collect.sh` 会自动使用 `compose_dh5.sh` 启动带
+串口和 USB/video 映射的 bringup；右手摇杆 Y 轴也可逐步调整 DH5 开合。
 
 需要分别调试三个进程时，也可以在三个终端运行下面的命令：
 
@@ -67,6 +131,30 @@ FCI、控制器、两路图像话题和 VR 话题均已就绪；本仓库的自�
 采集与假硬件。Docker 的详细构建和假硬件检查见
 [Humble 容器说明](ros2_ws/docker/franka_humble/README.md)。
 
+## Jazzy / LeRobot v3 合成验证
+
+`ros2_ws/docker/franka_jazzy/` 使用 ROS 2 Jazzy、Python 3.12 和
+LeRobot 0.6.1。它复用 Humble 的 `.env` 主机设置，但有独立镜像、Compose
+项目和 Python 环境。当前项目挂载可写，合成检查使用临时数据目录；该容器
+没有 USB 映射，也没有 Franka ROS 包、机器人 overlay、VR 发布器或相机
+bringup。它不替换 Humble 部署环境，也不改变训练仓库的 LeRobot 版本。
+
+```bash
+bash ros2_ws/docker/franka_jazzy/scripts/compose_safe.sh build
+bash ros2_ws/docker/franka_jazzy/scripts/compose_safe.sh run --rm franka_jazzy \
+  python ros2_ws/docker/franka_jazzy/scripts/smoke_test.py
+bash ros2_ws/docker/franka_jazzy/scripts/compose_safe.sh run --rm franka_jazzy \
+  python tests/docker_dataset_adapter_smoke.py --format v3
+bash ros2_ws/docker/franka_jazzy/scripts/compose_safe.sh run --rm franka_jazzy \
+  python tests/docker_recording_smoke.py --backend jazzy
+bash ros2_ws/docker/franka_jazzy/scripts/compose_safe.sh run --rm franka_jazzy \
+  python tests/docker_collect_pipeline_smoke.py --backend jazzy
+```
+
+这些检查覆盖 ROS Python / `cv_bridge` 导入、v3 创建和回读、续写与丢弃、
+DH5 字段、生产写入器和合成采集流程。`cv_bridge` 4.1.0 在镜像中针对
+NumPy 2 重建。详细说明见 [Jazzy 容器说明](ros2_ws/docker/franka_jazzy/README.md)。
+
 ## Multi-rate collection
 
 `vr_collect.py` samples the latest VR pose and sends a
@@ -74,13 +162,19 @@ robot target at the configured `control.control_frequency` (100 Hz). The ROS
 controller still runs at 1 kHz. A 100 Hz loop does not make the headset produce
 100 new poses per second; repeated `vr_pose_seq` values identify reused input.
 
+The collection loop samples the latest robot state; its 100 Hz rate does not
+guarantee 100 fresh ROS state messages per second. The current bringup defaults
+to `joint_state_rate:=30`, independently of the controller's 1 kHz update rate.
+
 The two RealSense nodes run at 640×480×30. The camera adapter crops and resizes
 frames in a background thread. Only a pair in which **both** cameras have a new
 frame is inserted into LeRobot. That dataset has `fps=30`; every frame records
 both a 6D `ee_pose` and 7D `joint_position`. `dataset.action_space` selects
 whether its `actions` feature contains 6D EE pose plus gripper (7D) or seven
 joint angles plus gripper (8D). A frame action is measured at the next fresh
-camera pair. Image insertion runs in a separate thread.
+camera pair. Image insertion runs in a separate thread. `exterior_image_2_left`
+is a blank placeholder for schema compatibility. DH5 recordings additionally
+store both gripper images and front/wrist timestamp and frame-age fields.
 
 Each saved episode also has two files in the dataset root:
 
@@ -109,13 +203,19 @@ Verify its robot, camera, recording, date and action-space settings before a run
 
 ## Plain 30 Hz inference
 
-`inference.py` runs the `pi0_base_ee_ros_30hz` checkpoint trained in
+`inference.py` selects its protocol from the policy server's metadata. The
+checked-in config connects to the merged Force RLT server on **port 8002**;
+the EE workflow below must use **`--port 8001`** (or set that port in the YAML).
+Both modes run at 30 Hz and do not save observations or episodes. The current
+Python 3.10 import blockers listed above must be fixed before either mode runs.
+
+For the EE protocol, `inference.py` runs the `pi0_base_ee_ros_30hz` checkpoint trained in
 `openpi-force`. It sends 224×224 front/wrist images, measured 6D EE pose, the
 logical 0/1 gripper state, and the task prompt to the policy server. The server
 returns 16 future absolute EE pose targets and logical gripper commands at 30 Hz.
 The inference loop samples state and publishes a target at 30 Hz, requesting a
 new chunk after eight model steps. This entry point does not save observations
-or episodes. Before starting the cameras or arm controller, it sends five blank
+or episodes. Before creating its camera and arm adapters, it sends five blank
 observations to warm the policy server, validates each returned action chunk,
 and discards those actions. Inference starts only after all five requests finish.
 
@@ -145,7 +245,7 @@ bash ros2_ws/docker/franka_humble/scripts/compose_devices.sh run --rm franka_hum
 
 # Terminal 2: inference client (shares host networking and the ROS domain).
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
-  franka_humble python inference.py --prompt "Place the object into the basket"
+  franka_humble python inference.py --port 8001 --prompt "Place the object into the basket"
 ```
 
 The checked-in inference config uses fake hardware and requires live ROS
@@ -157,20 +257,71 @@ start joints first; otherwise inference starts from the current pose. The
 default run lasts 600 control ticks (20 seconds); `--max-steps 0` runs until
 Ctrl+C. The policy server must expose the training config's 30 Hz metadata.
 
+### Force RLT
+
+Start the merged VLA/readout/actor server in the separate GPU environment, then
+use the same ROS bringup and the default client port:
+
+```bash
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python inference.py --port 8002 --prompt "Place the object into the basket"
+```
+
+The client sends both 224×224 RGB images, seven measured joints, logical
+gripper state, the measured `O_T_TCP` transform, a monotonic observation time,
+and the prompt. It validates the server's Force RLT protocols, 30 Hz timing,
+16-step prediction horizon, actor hash, and observation timestamp. The actor
+proposes seven physical joint targets per step; this protocol does not use the
+EE mode's 7D pose-and-gripper action layout.
+
+`force_rlt.execute_joint_targets: false` is the default: the loop requests and
+checks actor proposals while publishing measured joints to hold the arm.
+`--move-to-start` still requests a move to the configured starting pose.
+Joint-target execution is supported only with fake hardware and explicit
+seven-value arrays for `force_rlt.joint_lower`, `joint_upper`,
+`max_joint_step_rad`, and `reference_radius_rad`. Real-hardware execution is
+rejected until a calibrated TCP/IK safety projector is available. Group B is
+supported; group C is rejected because the client has no synchronized finger
+camera history pipeline. The default reference age limit is 0.2 seconds.
+
 ## Human in the Loop inference and recording
 
-`vr_hitl_inference.py` runs policy inference with optional VR takeover and records the rollout. The
+`inference_hitl.py` runs policy inference with optional VR takeover and records the rollout. The
 servo loop runs at 100 Hz, and a separate worker requests policy actions at up
 to 30 Hz. Holding both VR triggers takes control; releasing them returns
 control to the policy. The left controller's `Y` button marks the episode
 successful and `X` marks it failed; the episode is recorded either way and the
 loop resets for the next one.
 
-Configure the policy WebSocket in `config/hitl/franka.yaml`, then run
-`python vr_hitl_inference.py` inside the Humble container. For a simulated arm, use
-`python vr_hitl_inference.py --dry-run`; this still requires a policy server.
-For VR intervention, start `python -m teleop_xr.ros2 --mode teleop` in a
-separate sourced Humble terminal. Both collection modes subscribe to its right
+Configure the policy WebSocket in `config/hitl/franka.yaml`. The checked-in
+HITL config uses fake hardware, disables ROS cameras, and enables recording.
+For a live run, set `robot.use_fake_hardware: false` and
+`camera.camera_backend: ros`, then start the matching ROS bringup with
+`compose_devices.sh` as shown above. Once the Python 3.10 import blockers are
+resolved, run the client and VR publisher in separate Humble containers:
+
+```bash
+# Terminal 2: VR topics for intervention.
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python -m teleop_xr.ros2 --mode teleop
+
+# Terminal 3: policy rollouts and local branch recording.
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python inference_hitl.py --config config/hitl/franka.yaml
+```
+
+For dummy arm/cameras, the following does not need ROS bringup or VR topics,
+but still requires a compatible policy server and writes local recordings:
+
+```bash
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python inference_hitl.py --dry-run --max-episodes 1
+```
+
+The HITL client expects an XYZ displacement and a gripper-close flag in the
+policy's `actions` response. Its observation layout and action interpretation
+differ from both plain inference protocols; use a server compatible with this
+HITL contract. Both VR workflows subscribe to the publisher's right
 controller pose and left/right Joy topics. Hold both trigger buttons for the
 configured `vr_long_press_s` to take control; stale pose or Joy input releases
 the deadman.
@@ -202,24 +353,29 @@ The collection and inference scripts are not needed to move the arm by hand.
 repository root inside the Humble container:
 
 ```bash
-python -m control.franka_ros2_control status
-python -m control.franka_ros2_control hold
-python -m control.franka_ros2_control gripper-open
-python -m control.franka_ros2_control gripper-close
-python -m control.franka_ros2_control move-start
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python -m control.franka_ros2_control status
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python -m control.franka_ros2_control hold
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python -m control.franka_ros2_control gripper-open
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python -m control.franka_ros2_control gripper-close
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python -m control.franka_ros2_control move-start
 ```
 
-Missing real-robot topics are errors unless `--use-fake-hardware` is passed, so
+Start the matching ROS bringup first. Missing real-robot topics are errors
+unless `--use-fake-hardware` is passed, so
 the CLI never silently commands a robot. The same module exposes an importable
 facade: `from control.franka_ros2_control import FrankaROS2Control`.
 
 ## Tests
 
-The tests replace the robot, cameras, and policy server with fakes, so they
-never move hardware and never write a dataset. Run them in the Humble
-container, which is the only environment where the ROS entry points run at all:
-the host interpreter is Python 3.11 while the host ROS is Jazzy (Python 3.12),
-so `import rclpy` fails outside the container.
+The tests use fake robot/camera inputs and fake or local test policy servers.
+Dataset tests write temporary synthetic datasets; they do not move real
+hardware. Run ROS runtime checks in the Humble container after resolving the
+startup blockers above:
 
 ```bash
 bash ros2_ws/docker/franka_humble/scripts/run_tests.sh
@@ -232,12 +388,19 @@ That script syncs `/opt/uv/venv` from
 `lerobot` is missing, so the container run covers every test it can import
 instead of failing collection. The entry points split the same way —
 `vr_collect.py` reports an error when logging is enabled but lerobot is missing, while
-`inference.py` and `vr_hitl_inference.py` need only the container venv
-(`websockets`, `msgpack`).
+`inference.py` and `inference_hitl.py` use the policy client dependencies
+(`websockets`, `msgpack`) without loading a model locally. The dataset smoke
+commands above cover the v2 and v3 recording adapters separately. Synthetic
+checks do not verify FCI, live camera/VR input, or real-arm execution.
 
-The host `.venv` still runs the non-ROS tests without waiting for a container
-sync — the `data_analysis/` tooling and the inference contract tests:
+## Repository layout
 
-```bash
-.venv/bin/python -m pytest -q tests/test_inference.py
-```
+| Directory | Contents |
+| --- | --- |
+| `control/` | ROS arm, gripper, camera and VR adapters; collection recorder; HITL loop |
+| `config/{collect,inference,hitl}/` | Per-workflow robot YAML configuration |
+| `data_analysis/` | Offline dataset quality checks, episode editing/merging, and audio tools |
+| `scripts/` | Dataset/model transfer and instruction audio feature precomputation |
+| `ros2_ws/src/data_collect_franka/` | ROS bringup, controllers, DH5 and camera nodes |
+| `ros2_ws/docker/` | Humble deployment runtime and isolated Jazzy experiment |
+| `tests/` | Unit/contract tests and synthetic Docker recording checks |
