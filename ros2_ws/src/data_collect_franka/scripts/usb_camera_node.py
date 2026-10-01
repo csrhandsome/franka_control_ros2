@@ -7,6 +7,8 @@ driver and does not replace realsense2_camera.
 
 from __future__ import annotations
 
+import contextlib
+
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
@@ -80,11 +82,9 @@ class UsbCameraNode(Node):
         self._pub.publish(msg)
 
     def destroy_node(self) -> bool:
-        try:
+        with contextlib.suppress(Exception):
             if self._capture is not None:
                 self._capture.release()
-        except Exception:
-            pass
         return super().destroy_node()
 
 

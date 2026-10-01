@@ -19,6 +19,8 @@ from control.hitl.types import (
     StepRecord,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class RobotLoop(ABC):
     """Owns env, optional policy, safety clip, and the episode/step cadence.
@@ -57,7 +59,7 @@ class RobotLoop(ABC):
             try:
                 self.teardown()
             except Exception:
-                logging.exception("[HITL] teardown failed")
+                logger.exception("[HITL] teardown failed")
             if self.policy is not None:
                 self.policy.close()
             self.env.close()
@@ -105,7 +107,7 @@ class RobotLoop(ABC):
             success = False
             period_s = 1.0 / self.fps
             next_tick = time.monotonic()
-            logging.info("[HITL] episode %s start", episode_index)
+            logger.info("[HITL] episode %s start", episode_index)
 
             while not done and not self._stop:
                 remaining = next_tick - time.monotonic()
@@ -187,7 +189,7 @@ class RobotLoop(ABC):
                 extras={"interrupted": bool(self._stop)},
             )
             self.on_episode_end(stats)
-            logging.info(
+            logger.info(
                 "[HITL] episode %s done success=%s steps=%s clip=%.2f",
                 episode_index,
                 success,

@@ -6,6 +6,7 @@ Image subscriptions rather than OpenCV VideoCapture.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from dataclasses import dataclass, field
@@ -22,6 +23,8 @@ except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "DH5GripperRos requires Humble rclpy. Run it inside the franka_humble container."
     ) from exc
+
+from typing import Self
 
 from control.dual_camera_manager_ros import DualRealsenseManagerRos
 
@@ -128,7 +131,7 @@ class DH5GripperRos:
     def _on_state(self, msg: JointState) -> None:
         with self._lock:
             if msg.position:
-                self._position_command = int(round(float(msg.position[0])))
+                self._position_command = round(float(msg.position[0]))
                 self._gripper_level = self._position_to_level(self._position_command)
             self._have_state = True
 
@@ -183,7 +186,7 @@ class DH5GripperRos:
         clipped = int(np.clip(level, 0, self.max_gripper_level))
         if self.max_gripper_level <= 0:
             return 0
-        return int(round((float(clipped) / float(self.max_gripper_level)) * 1000.0))
+        return round((float(clipped) / float(self.max_gripper_level)) * 1000.0)
 
     def _position_to_level(self, position: int) -> int:
         if self.max_gripper_level <= 0:
@@ -264,20 +267,14 @@ class DH5GripperRos:
         return self.dual_camera_manager.wait_for_frames(timeout_s=timeout_s)
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.dual_camera_manager.close()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             self._executor.cancel()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             self._node.destroy_node()
-        except Exception:
-            pass
 
-    def __enter__(self) -> DH5GripperRos:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:

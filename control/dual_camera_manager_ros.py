@@ -5,6 +5,7 @@ API aligned with DualRealsenseManager. Humble container only.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from dataclasses import dataclass
@@ -183,12 +184,8 @@ class DualRealsenseManagerRos:
         if self._refresh_thread is not None:
             self._refresh_thread.join(timeout=2.0)
         if self._executor is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._executor.cancel()
-            except Exception:
-                pass
         if self._enabled:
-            try:
+            with contextlib.suppress(Exception):
                 self._node.destroy_node()
-            except Exception:
-                pass

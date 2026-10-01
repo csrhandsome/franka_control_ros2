@@ -1,8 +1,8 @@
-# Inference for openpi-force's pi0_base_ee_ros_30hz checkpoint.
-# Run the policy server separately; this process never writes a dataset.
+# The merged force RLT server uses port 8002; the legacy EE policy can be selected with --port 8001.
+# Force RLT runs in hold/shadow mode until joint execution is explicitly configured.
 policy_server:
   host: "127.0.0.1"
-  port: 8001
+  port: 8002
 
 inference:
   prompt: "Place the object into the basket"
@@ -39,3 +39,7 @@ robot:
 
 gripper:
   gripper_type: franka
+
+force_rlt:
+  execute_joint_targets: false
+  max_ref_age_s: 0.2

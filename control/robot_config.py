@@ -45,7 +45,7 @@ def load_mapping(path: Path) -> dict:
     with Path(path).open(encoding="utf-8") as file:
         loaded = yaml.safe_load(file)
     if not isinstance(loaded, dict):
-        raise ValueError(f"Config must be a mapping: {path}")
+        raise TypeError(f"Config must be a mapping: {path}")
     return loaded
 
 
@@ -64,7 +64,7 @@ def flatten_config(path: Path) -> SimpleNamespace:
 def section(config: dict, name: str) -> SimpleNamespace:
     payload = config.get(name) or {}
     if not isinstance(payload, dict):
-        raise ValueError(f"Config section {name!r} must be a mapping")
+        raise TypeError(f"Config section {name!r} must be a mapping")
     return SimpleNamespace(**payload)
 
 

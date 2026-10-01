@@ -5,6 +5,7 @@ Use inside the Humble container with realsense2_camera.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 
@@ -108,7 +109,5 @@ class RealSenseConnectorRos:
         with self._lock:
             self._rgb = None
         if self._owns_node:
-            try:
+            with contextlib.suppress(Exception):
                 self._node.destroy_node()
-            except Exception:
-                pass

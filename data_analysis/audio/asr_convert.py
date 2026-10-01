@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """把音频数据集转成 ASR 提示词数据集，两个后端：whisper / qwen3-asr。
 
 非破坏性：默认把输入数据集拷贝成 ``<name>_asr`` / ``<name>_qwen_asr``，只改副本。

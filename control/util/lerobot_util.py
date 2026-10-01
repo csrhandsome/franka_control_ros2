@@ -5,57 +5,18 @@ from pathlib import Path
 import numpy as np
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
-
-def _image_feature(image_hw: int) -> dict[str, object]:
-    return {
-        "dtype": "image",
-        "shape": (image_hw, image_hw, 3),
-        "names": ["height", "width", "channel"],
-    }
-
-
-def _scalar_feature(name: str, *, dtype: str = "float32") -> dict[str, object]:
-    return {
-        "dtype": dtype,
-        "shape": (1,),
-        "names": [name],
-    }
+from control.util.lerobot_schema import build_features
 
 
 def _create_dataset(
     repo_id: str, *, fps: float, image_hw: int, root: Path, action_space: str = "joint"
 ) -> LeRobotDataset:
-    action_dim = 7 if action_space == "ee" else 8
     return LeRobotDataset.create(
         repo_id=repo_id,
         robot_type="panda",
         fps=float(fps),
         root=root,
-        features={
-            "exterior_image_1_left": _image_feature(image_hw),
-            "exterior_image_2_left": _image_feature(image_hw),
-            "wrist_image_left": _image_feature(image_hw),
-            "joint_position": {
-                "dtype": "float32",
-                "shape": (7,),
-                "names": ["joint_position"],
-            },
-            "ee_pose": {
-                "dtype": "float32",
-                "shape": (6,),
-                "names": ["x", "y", "z", "roll", "pitch", "yaw"],
-            },
-            "gripper_position": {
-                "dtype": "float32",
-                "shape": (1,),
-                "names": ["gripper_position"],
-            },
-            "actions": {
-                "dtype": "float32",
-                "shape": (action_dim,),
-                "names": ["actions"],
-            },
-        },
+        features=build_features(image_hw, action_space),
         image_writer_threads=6,
         image_writer_processes=0,
     )
@@ -64,43 +25,12 @@ def _create_dataset(
 def _create_dataset_force(
     repo_id: str, *, fps: float, image_hw: int, root: Path, action_space: str = "joint"
 ) -> LeRobotDataset:
-    action_dim = 7 if action_space == "ee" else 8
     return LeRobotDataset.create(
         repo_id=repo_id,
         robot_type="panda",
         fps=float(fps),
         root=root,
-        features={
-            "exterior_image_1_left": _image_feature(image_hw),
-            "exterior_image_2_left": _image_feature(image_hw),
-            "wrist_image_left": _image_feature(image_hw),
-            "gripper_image_left": _image_feature(image_hw),
-            "gripper_image_right": _image_feature(image_hw),
-            "joint_position": {
-                "dtype": "float32",
-                "shape": (7,),
-                "names": ["joint_position"],
-            },
-            "ee_pose": {
-                "dtype": "float32",
-                "shape": (6,),
-                "names": ["x", "y", "z", "roll", "pitch", "yaw"],
-            },
-            "gripper_position": _scalar_feature("gripper_position"),
-            "actions": {
-                "dtype": "float32",
-                "shape": (action_dim,),
-                "names": ["actions"],
-            },
-            "external_camera_timestamp_ms": _scalar_feature(
-                "external_camera_timestamp_ms"
-            ),
-            "wrist_camera_timestamp_ms": _scalar_feature("wrist_camera_timestamp_ms"),
-            "external_camera_frame_age_s": _scalar_feature(
-                "external_camera_frame_age_s"
-            ),
-            "wrist_camera_frame_age_s": _scalar_feature("wrist_camera_frame_age_s"),
-        },
+        features=build_features(image_hw, action_space, force=True),
         image_writer_threads=6,
         image_writer_processes=0,
     )
@@ -254,7 +184,9 @@ def _load_or_create_dataset(
                 f"'{root / 'images'}' episode directory and retry."
             ) from exc
 
-    return _create_dataset(repo_id, fps=fps, image_hw=image_hw, root=root, action_space=action_space)
+    return _create_dataset(
+        repo_id, fps=fps, image_hw=image_hw, root=root, action_space=action_space
+    )
 
 
 def _load_or_create_dataset_force(
@@ -282,7 +214,9 @@ def _load_or_create_dataset_force(
                 f"'{root / 'images'}' episode directory and retry."
             ) from exc
 
-    return _create_dataset_force(repo_id, fps=fps, image_hw=image_hw, root=root, action_space=action_space)
+    return _create_dataset_force(
+        repo_id, fps=fps, image_hw=image_hw, root=root, action_space=action_space
+    )
 
 
 def _prepare_episode_for_save(dataset: LeRobotDataset) -> None:
@@ -310,3 +244,11 @@ def _discard_unsaved_episode(dataset: LeRobotDataset) -> None:
         wait_image_writer()
 
     dataset.clear_episode_buffer()
+
+
+def _next_episode_index(dataset: LeRobotDataset) -> int:
+    return int(dataset.episode_buffer["episode_index"])
+
+
+def _close_dataset(dataset: LeRobotDataset) -> None:
+    dataset.stop_image_writer()

@@ -7,6 +7,7 @@ instead of opening the serial port themselves.
 
 from __future__ import annotations
 
+import contextlib
 import time
 
 import rclpy
@@ -250,11 +251,9 @@ class Dh5GripperNode(Node):
         self._ratio_pub.publish(ratio)
 
     def destroy_node(self) -> bool:
-        try:
+        with contextlib.suppress(Exception):
             if self._hand is not None and self._hand.sc.is_open:
                 self._hand.sc.close()
-        except Exception:
-            pass
         return super().destroy_node()
 
 

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Franka ROS 2 control CLI / import facade.
 
 Runs in the Humble Docker image, from the repository root::

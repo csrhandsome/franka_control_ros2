@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -11,6 +12,8 @@ import numpy as np
 from control.hitl.types import FRONT_IMAGE_KEY, STATE_KEY, WRIST_IMAGE_KEY
 from control.robot_config import parse_control_mode, parse_gripper_type
 from control.robot_config import section as _section
+
+logger = logging.getLogger(__name__)
 
 
 def blank_image(size: int) -> np.ndarray:
@@ -225,19 +228,13 @@ class RosRobotEnv:
         self._set_gripper(gripper_close)
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.arm.cleanup()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             self.cameras.close()
-        except Exception:
-            pass
         if self.soft_gripper is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.soft_gripper.close()
-            except Exception:
-                pass
 
 
 def make_env(config: dict, *, dry_run: bool) -> RobotEnv:
@@ -247,7 +244,7 @@ def make_env(config: dict, *, dry_run: bool) -> RobotEnv:
     gripper_cfg = _section(config, "gripper")
     control_mode = parse_control_mode(getattr(control_cfg, "control_mode", "ee"))
     gripper_type = parse_gripper_type(getattr(gripper_cfg, "gripper_type", "franka"))
-    logging.info(
+    logger.info(
         "[HITL] control_mode=%s gripper_type=%s dry_run=%s",
         control_mode,
         gripper_type,

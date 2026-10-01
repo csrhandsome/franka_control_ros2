@@ -18,6 +18,7 @@ LeRobot 磁盘格式逻辑：JSON/JSONL 读写、episode 文件路径解析、�
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 from collections.abc import Iterable
@@ -155,7 +156,7 @@ def safe_float(value: Any) -> float | None:
         out = float(value)
     except (TypeError, ValueError, OverflowError):
         return None
-    if out != out or out in (float("inf"), float("-inf")):
+    if not math.isfinite(out):
         return None
     return out
 
@@ -325,7 +326,7 @@ def episode_indices(
     if info_path.is_file():
         try:
             total = int(read_json(info_path).get("total_episodes", 0))
-        except Exception:
+        except (OSError, TypeError, ValueError):
             total = 0
         if total > 0:
             return list(range(total))

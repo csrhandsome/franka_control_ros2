@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import types
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -19,6 +20,7 @@ from inference import (
     ACTION_DIM,
     ACTION_HORIZON,
     PERIOD_NS,
+    WARMUP_CHUNKS,
     _command_gripper,
     action_at,
     build_observation,
@@ -53,7 +55,12 @@ def _frames():
 
 
 class FakePolicy:
-    server_metadata = {"action_fps": 30.0, "action_horizon": 16, "action_space": "ee", "action_dim": 7}
+    server_metadata: ClassVar[dict] = {
+        "action_fps": 30.0,
+        "action_horizon": 16,
+        "action_space": "ee",
+        "action_dim": 7,
+    }
 
     def __init__(self, **_kwargs):
         self.observations: list[dict] = []
@@ -196,7 +203,9 @@ def test_policy_metadata_and_chunk_timing():
     with pytest.raises(ValueError):
         validate_policy_metadata({**FakePolicy.server_metadata, "action_fps": 100.0})
     with pytest.raises(ValueError):
-        validate_policy_metadata({**FakePolicy.server_metadata, "action_space": "joint"})
+        validate_policy_metadata(
+            {**FakePolicy.server_metadata, "action_space": "joint"}
+        )
     with pytest.raises(ValueError):
         validate_policy_metadata({})
     actions = np.tile(
@@ -214,7 +223,9 @@ def test_invalid_or_large_ee_targets_are_rejected():
 
     current = EEPose.from_vector(np.array([0.0, 0.0, 0.5, 0.0, 0.0, 0.0]))
     with pytest.raises(ValueError):
-        checked_ee_target(np.array([0.1, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0]), current, 0.03, 0.15)
+        checked_ee_target(
+            np.array([0.1, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0]), current, 0.03, 0.15
+        )
     with pytest.raises(ValueError):
         parse_action_plan({"actions": np.full((16, 7), np.nan)}, 0)
     with pytest.raises(ValueError):
@@ -261,12 +272,54 @@ def test_plain_inference_commands_ee_without_writing_files(
     arm = created["arm"]
     assert created["policy"].observations
     assert any(np.allclose(command, [0.01, 0.0, 0.5]) for command in arm.commands)
-    assert arm.calls.index("start_ee_streaming") < arm.calls.index(
-        "set_ee_control"
-    )
+    assert arm.calls.index("start_ee_streaming") < arm.calls.index("set_ee_control")
     assert "move_to_start" not in arm.calls
     assert created["policy"].closed and arm.closed and created["cameras"].closed
     assert list(tmp_path.iterdir()) == []
+
+
+def test_warmup_finishes_before_camera_and_arm_setup(monkeypatch, config):
+    created = {}
+
+    class CheckingCameras(FakeCameras):
+        def __init__(self, **kwargs):
+            assert len(created["policy"].observations) == WARMUP_CHUNKS
+            super().__init__(**kwargs)
+
+    class CheckingArm(FakeArm):
+        def __init__(self, **kwargs):
+            assert len(created["policy"].observations) == WARMUP_CHUNKS
+            super().__init__(**kwargs)
+
+    created = _install_ros_stubs(monkeypatch, cameras=CheckingCameras, arm=CheckingArm)
+    run(config, host=None, port=None, prompt=None, max_steps=1, move_to_start=False)
+
+    warmup_requests = created["policy"].observations[:WARMUP_CHUNKS]
+    assert len(warmup_requests) == WARMUP_CHUNKS
+    for observation in warmup_requests:
+        assert set(observation) == REPACK_KEYS
+        assert observation["prompt"] == ""
+        assert not observation["observation/exterior_image_1_left"].any()
+        assert not observation["observation/wrist_image_left"].any()
+        assert not observation["observation/ee_pose"].any()
+        assert not observation["observation/gripper_position"].any()
+
+
+def test_invalid_warmup_chunk_aborts_before_camera_and_arm_setup(monkeypatch, config):
+    class InvalidThirdChunk(FakePolicy):
+        def infer(self, observation):
+            self.observations.append(observation)
+            if len(self.observations) == 3:
+                return {"actions": np.zeros((8, ACTION_DIM), dtype=np.float32)}
+            return {"actions": POLICY_ACTION.copy()}
+
+    created = _install_ros_stubs(monkeypatch, policy=InvalidThirdChunk)
+    with pytest.raises(RuntimeError, match="Policy warmup failed on request 3/5"):
+        run(config, host=None, port=None, prompt=None, max_steps=1, move_to_start=False)
+
+    assert len(created["policy"].observations) == 3
+    assert created["policy"].closed
+    assert "cameras" not in created and "arm" not in created
 
 
 def test_replanning_keeps_inference_off_the_30_hz_path(monkeypatch, tmp_path, config):
@@ -292,7 +345,7 @@ def test_stale_camera_frames_abort_and_hold_position(monkeypatch, tmp_path, conf
         )
 
     arm = created["arm"]
-    assert created["policy"].observations == []
+    assert len(created["policy"].observations) == WARMUP_CHUNKS
     assert arm.commands and np.allclose(arm.commands[-1], [0.0, 0.0, 0.5])
     assert arm.gripper_calls == []
     assert created["policy"].closed and arm.closed and created["cameras"].closed
@@ -322,7 +375,9 @@ def test_policy_failure_stops_inference_and_releases_resources(
     monkeypatch, tmp_path, config
 ):
     class FailingPolicy(FakePolicy):
-        def infer(self, _observation):
+        def infer(self, observation):
+            if observation["prompt"] == "":
+                return super().infer(observation)
             raise RuntimeError("server exploded")
 
     created = _install_ros_stubs(monkeypatch, policy=FailingPolicy)
@@ -360,7 +415,10 @@ def test_incompatible_policy_metadata_fails_before_moving_the_robot(
     monkeypatch, tmp_path, config
 ):
     class HundredHzPolicy(FakePolicy):
-        server_metadata = {**FakePolicy.server_metadata, "action_fps": 100.0}
+        server_metadata: ClassVar[dict] = {
+            **FakePolicy.server_metadata,
+            "action_fps": 100.0,
+        }
 
     created = _install_ros_stubs(monkeypatch, policy=HundredHzPolicy)
     monkeypatch.chdir(tmp_path)
@@ -500,8 +558,9 @@ def test_real_policy_client_round_trips_observations(monkeypatch, tmp_path, conf
             move_to_start=False,
         )
     assert server.error is None
-    assert 1 <= len(server.observations) <= 3
-    observation = server.observations[0]
+    assert WARMUP_CHUNKS + 1 <= len(server.observations) <= WARMUP_CHUNKS + 3
+    assert all(obs["prompt"] == "" for obs in server.observations[:WARMUP_CHUNKS])
+    observation = server.observations[WARMUP_CHUNKS]
     assert set(observation) == REPACK_KEYS
     assert observation["prompt"] == "pick the cube"
     assert observation["observation/exterior_image_1_left"].dtype == np.uint8
@@ -512,7 +571,9 @@ def test_real_policy_client_round_trips_observations(monkeypatch, tmp_path, conf
     assert observation["observation/gripper_position"].shape == (1,)
     assert observation["observation/gripper_position"][0] == 1.0
     # The server's 16x7 reply reached the arm as absolute Cartesian targets.
-    assert any(np.allclose(command, [0.01, 0.0, 0.5]) for command in created["arm"].commands)
+    assert any(
+        np.allclose(command, [0.01, 0.0, 0.5]) for command in created["arm"].commands
+    )
     assert len(created["arm"].gripper_calls) == 1
     name, kwargs = created["arm"].gripper_calls[0]
     assert name == "open" and kwargs["wait"] is False

@@ -165,7 +165,6 @@ def build_lerobot_dataset(
     global_start = 0
 
     for episode_index, length in enumerate(lengths):
-        episode_rows: list[dict] = []
         frame_indices = list(range(length))
         global_indices = list(range(global_start, global_start + length))
         task_index = episode_index % len(TASKS)

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Run policy inference with optional VR intervention and branch recording.
 
 Runs in the Humble container for real/fake hardware, or ``--dry-run`` with a
@@ -13,6 +12,8 @@ from pathlib import Path
 
 from control.hitl.collector import HumanInTheLoopCollector
 from control.robot_config import config_path, load_mapping
+
+logger = logging.getLogger(__name__)
 
 
 def run_loop(
@@ -60,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     config_file = config_path(stage="hitl", robot=args.robot, explicit=args.config)
     config = load_mapping(config_file)
-    logging.info("[HIL] config=%s", config_file)
+    logger.info("[HIL] config=%s", config_file)
     run_loop(
         config=config,
         dry_run=bool(args.dry_run),

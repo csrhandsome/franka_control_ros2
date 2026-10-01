@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Merge local LeRobot datasets under data/openpi.
 
 Example:
@@ -184,7 +183,7 @@ def _rewrite_audio_json(
     """
     try:
         payload = meta.read_json(path)
-    except Exception:
+    except (OSError, ValueError):
         return
 
     old_stem = meta.episode_stem(old_episode_index)

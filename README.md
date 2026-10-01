@@ -8,6 +8,12 @@ without recording). Everything else lives under `control/`, `config/`,
 
 ## 在 Docker 中采集 LeRobot 数据
 
+采集入口统一为 `vr_collect.py`。通过 `dataset.lerobot_format: v2 | v3`
+选择数据格式，也可用 `--lerobot-format` 临时覆盖：v2 对应 Humble 镜像中的
+LeRobot 0.1，v3 对应 Jazzy 镜像中的 LeRobot 0.6.1。Jazzy 的合成记录验证
+命令和当前运行范围见
+[`ros2_ws/docker/franka_jazzy/README.md`](ros2_ws/docker/franka_jazzy/README.md)。
+
 采集容器使用 ROS 2 Humble、固定版本的 LeRobot 和 CPU 版 PyTorch，直接写入
 LeRobot 数据集；模型推理和训练可在本机 GPU 环境运行。以下命令均在仓库根目录执行。
 首次使用时，从 `ros2_ws/docker/franka_humble/.env.example` 复制 `.env`，并填写
@@ -17,13 +23,14 @@ LeRobot 数据集；模型推理和训练可在本机 GPU 环境运行。以下�
 test -f ros2_ws/docker/franka_humble/.env || cp ros2_ws/docker/franka_humble/.env.example ros2_ws/docker/franka_humble/.env
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh build franka_humble
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble uv-env-smoke-test
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble python tests/docker_dataset_adapter_smoke.py --format v2
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble python tests/docker_recording_smoke.py
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble python tests/docker_collect_pipeline_smoke.py
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble bash ros2_ws/docker/franka_humble/scripts/build_overlay.sh
 ```
 
-前两个采集检查分别验证 LeRobot episode 的写入/回读，以及 `vr_collect.py` 的
-完整录制流程；它们使用合成输入和临时目录。接入真实设备前，修改
+采集检查验证统一数据集接口、LeRobot episode 的写入/回读，以及
+`vr_collect.py` 的完整录制流程；它们使用合成输入和临时目录。接入真实设备前，修改
 `config/collect/franka.yaml`：`dataset.enable_logging: true`、
 `camera.camera_backend: ros`、`robot.use_fake_hardware: false`，将
 `dataset.date` 设为本次采集标识，并核对两路相机序列号和话题。配置完成且
@@ -33,6 +40,8 @@ bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble
 启用真实硬件、相机和数据保存，运行前必须逐项核对。`dataset.action_space: ee`
 保存 7D 的末端位姿加夹爪动作；改为 `joint` 则保存 8D 的关节角加夹爪动作。
 切换动作空间后请更换 `dataset.date`。
+`./collect.sh` 目前只启动 Humble 运行环境，因此要求 `dataset.lerobot_format: v2`；
+Jazzy 镜像当前只完成合成记录验证，尚无机器人 bringup。
 
 需要分别调试三个进程时，也可以在三个终端运行下面的命令：
 
@@ -106,7 +115,9 @@ logical 0/1 gripper state, and the task prompt to the policy server. The server
 returns 16 future absolute EE pose targets and logical gripper commands at 30 Hz.
 The inference loop samples state and publishes a target at 30 Hz, requesting a
 new chunk after eight model steps. This entry point does not save observations
-or episodes.
+or episodes. Before starting the cameras or arm controller, it sends five blank
+observations to warm the policy server, validates each returned action chunk,
+and discards those actions. Inference starts only after all five requests finish.
 
 Start the trained checkpoint in the `openpi-force` repository (replace the
 checkpoint directory with the one you trained):

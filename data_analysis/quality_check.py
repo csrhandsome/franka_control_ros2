@@ -52,7 +52,7 @@ def _load_json_if_exists(path: Path) -> dict[str, Any] | None:
         return None
     try:
         return meta.read_json(path)
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return None
 
 
@@ -71,7 +71,7 @@ def _to_optional_int(value: Any) -> int | None:
         if value is None:
             return None
         return int(value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -187,7 +187,7 @@ def check_image_quality(
         return results
 
     # 获取期望的图像形状
-    first_img_key = list(image_features.keys())[0]
+    first_img_key = next(iter(image_features.keys()))
     results["expected_shape"] = tuple(image_features[first_img_key]["shape"])
     print(f"  期望图像形状: {results['expected_shape']}")
     print(f"  图像特征: {', '.join(results['image_keys'])}")
@@ -944,7 +944,7 @@ def generate_visualizations(
         stats = results["action_data"]["action_stats"]
         action_dim = results["action_data"]["action_dim"]
 
-        fig, axes = plt.subplots(2, 1, figsize=(12, 8))
+        _fig, axes = plt.subplots(2, 1, figsize=(12, 8))
 
         # 均值和标准差
         x = np.arange(action_dim)
@@ -1035,7 +1035,7 @@ def generate_visualizations(
             images = [Image.open(img_file) for img_file in image_files]
 
             # 创建合并图表
-            fig, axes = plt.subplots(len(images), 1, figsize=(12, 5 * len(images)))
+            _fig, axes = plt.subplots(len(images), 1, figsize=(12, 5 * len(images)))
             if len(images) == 1:
                 axes = [axes]
 

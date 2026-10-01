@@ -1,6 +1,7 @@
 import json
 import time
 from types import SimpleNamespace
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -55,7 +56,7 @@ def test_old_20_fps_dataset_cannot_receive_new_30_fps_frames(tmp_path):
 
 
 class _SlowPolicy:
-    server_metadata = {}
+    server_metadata: ClassVar[dict] = {}
 
     def __init__(self):
         self.calls = 0

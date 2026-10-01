@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 import time
@@ -25,6 +26,9 @@ from control.hitl.types import (
     parse_ee_gripper_action,
 )
 from control.robot_config import section as _section
+from control.util.pose import quat_wxyz_to_xyzw, quat_xyzw_to_wxyz
+
+logger = logging.getLogger(__name__)
 
 
 class _ButtonEdge:
@@ -37,35 +41,28 @@ class _ButtonEdge:
         return rose
 
 
-def _quat_xyzw_to_wxyz(quaternion_xyzw: np.ndarray) -> np.ndarray:
-    q = np.asarray(quaternion_xyzw, dtype=np.float64).reshape(4)
-    return np.array([q[3], q[0], q[1], q[2]], dtype=np.float64)
-
-
-def _quat_wxyz_to_xyzw(quaternion_wxyz: np.ndarray) -> np.ndarray:
-    q = np.asarray(quaternion_wxyz, dtype=np.float64).reshape(4)
-    return np.array([q[1], q[2], q[3], q[0]], dtype=np.float64)
-
-
 def _maybe_vr(vr_cfg: SimpleNamespace):
     if not bool(getattr(vr_cfg, "enable_vr", False)):
         return None
     try:
-        from control.vr_input_ros import VRInputRos
+        from control.vr_input import VRInputRos
+
+        return VRInputRos(
+            pose_topic=str(vr_cfg.vr_pose_topic),
+            left_joy_topic=str(vr_cfg.vr_left_joy_topic),
+            right_joy_topic=str(vr_cfg.vr_right_joy_topic),
+            long_press_s=float(vr_cfg.vr_long_press_s),
+            assume_arm_enabled=bool(vr_cfg.vr_assume_arm_enabled),
+        )
     except Exception as exc:
-        logging.warning("[HITL] VR disabled, import failed: %s", exc)
+        logger.warning(
+            "[HITL] VR disabled, initialization failed: %s", exc, exc_info=True
+        )
         return None
-    return VRInputRos(
-        pose_topic=str(vr_cfg.vr_pose_topic),
-        left_joy_topic=str(vr_cfg.vr_left_joy_topic),
-        right_joy_topic=str(vr_cfg.vr_right_joy_topic),
-        long_press_s=float(vr_cfg.vr_long_press_s),
-        assume_arm_enabled=bool(vr_cfg.vr_assume_arm_enabled),
-    )
 
 
 def _maybe_vr_mapper(vr_cfg: SimpleNamespace, safety: EESafety):
-    from control.vr_input_mapper import VREEPoseMapper
+    from control.vr_input import VREEPoseMapper
 
     max_step = float(np.min(np.asarray(safety.max_step_xyz, dtype=np.float64)))
     return VREEPoseMapper(
@@ -200,15 +197,15 @@ class HumanInTheLoopCollector(RobotLoop):
         if self._vr is not None:
             self._vr.start()
         if self._recorder is not None:
-            logging.info("[HITL] recording to %s", self._recorder.run_dir)
+            logger.info("[HITL] recording to %s", self._recorder.run_dir)
         if self.policy is not None:
-            logging.info("[HITL] policy metadata: %s", self.policy.server_metadata)
+            logger.info("[HITL] policy metadata: %s", self.policy.server_metadata)
         if self._vr is not None:
-            logging.info(
+            logger.info(
                 "[HITL] VR subscribed: hold both triggers to take over, "
                 "release to give control back to the policy"
             )
-            logging.info("[HITL] VR keys: left Y=success  left X=failure")
+            logger.info("[HITL] VR keys: left Y=success  left X=failure")
 
     def teardown(self) -> None:
         self._policy_stop.set()
@@ -218,10 +215,8 @@ class HumanInTheLoopCollector(RobotLoop):
             self._flush_transition()
         finally:
             if self._vr is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._vr.stop()
-                except Exception:
-                    pass
             try:
                 if self._transitions is not None:
                     self._transitions.close()
@@ -241,7 +236,7 @@ class HumanInTheLoopCollector(RobotLoop):
                 try:
                     result = self.policy.infer(obs)
                 except Exception:
-                    logging.exception("[HITL] policy inference failed")
+                    logger.exception("[HITL] policy inference failed")
                     self.request_stop()
                     return
                 with self._policy_lock:
@@ -294,10 +289,10 @@ class HumanInTheLoopCollector(RobotLoop):
         if self._vr_mapper is not None:
             if arm_enabled and not self._prev_arm_enabled:
                 self._vr_mapper.reset()
-                logging.info("[HITL] VR deadman engaged, policy paused")
+                logger.info("[HITL] VR deadman engaged, policy paused")
             elif not arm_enabled and self._prev_arm_enabled:
                 self._vr_mapper.reset()
-                logging.info("[HITL] VR deadman released, policy resumes")
+                logger.info("[HITL] VR deadman released, policy resumes")
             self._prev_arm_enabled = arm_enabled
         intervening = bool(arm_enabled)
         with self._policy_lock:
@@ -321,10 +316,10 @@ class HumanInTheLoopCollector(RobotLoop):
                 target_pos, target_quat_wxyz = self._vr_mapper.map(
                     vr_input,
                     current_xyz,
-                    _quat_xyzw_to_wxyz(current_quat_xyzw),
+                    quat_xyzw_to_wxyz(current_quat_xyzw),
                 )
                 delta = np.asarray(target_pos, dtype=np.float64) - current_xyz
-                apply_quat = _quat_wxyz_to_xyzw(target_quat_wxyz)
+                apply_quat = quat_wxyz_to_xyzw(target_quat_wxyz)
             if vr_input is not None:
                 if vr_input.gripper_close:
                     self._gripper_closed = True
@@ -519,7 +514,7 @@ class HumanInTheLoopCollector(RobotLoop):
                     )
                 }
             )
-        logging.info(
+        logger.info(
             "[HITL] episode %s done success=%s steps=%s intervene=%.2f clip=%.2f",
             stats.episode_index,
             stats.success,

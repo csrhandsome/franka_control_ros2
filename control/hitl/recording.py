@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -21,7 +21,7 @@ from control.util import msgpack_numpy
 
 class LocalEpisodeRecorder:
     def __init__(self, output_dir: str | Path, max_pending: int = 300) -> None:
-        run_name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        run_name = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         self.run_dir = Path(output_dir) / f"{run_name}_{uuid4().hex[:8]}"
         self.run_dir.mkdir(parents=True, exist_ok=False)
         self._queue: queue.Queue[dict[str, Any] | None] = queue.Queue(max_pending)

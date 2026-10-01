@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Offline Silero-VAD preprocessing for per-episode audio.
 
 This script runs after data collection and before training. It reads the existing
@@ -98,7 +97,7 @@ def _resample_linear(
         return np.ascontiguousarray(audio, dtype=np.float32)
 
     duration_s = float(audio.shape[0]) / float(source_rate)
-    target_len = max(1, int(round(duration_s * float(target_rate))))
+    target_len = max(1, round(duration_s * float(target_rate)))
     source_x = np.linspace(0.0, duration_s, num=audio.shape[0], endpoint=False)
     target_x = np.linspace(0.0, duration_s, num=target_len, endpoint=False)
     return np.interp(target_x, source_x, audio).astype(np.float32)
@@ -187,17 +186,13 @@ def _fallback_get_speech_timestamps(
         if neg_threshold is None
         else float(neg_threshold)
     )
-    min_speech_samples = int(
-        round(int(sampling_rate) * min_speech_duration_ms / 1000.0)
-    )
-    min_silence_samples = int(
-        round(int(sampling_rate) * min_silence_duration_ms / 1000.0)
-    )
-    pad_samples = int(round(int(sampling_rate) * speech_pad_ms / 1000.0))
+    min_speech_samples = round(int(sampling_rate) * min_speech_duration_ms / 1000.0)
+    min_silence_samples = round(int(sampling_rate) * min_silence_duration_ms / 1000.0)
+    pad_samples = round(int(sampling_rate) * speech_pad_ms / 1000.0)
     max_speech_samples = (
         None
         if not np.isfinite(max_speech_duration_s)
-        else int(round(int(sampling_rate) * float(max_speech_duration_s)))
+        else round(int(sampling_rate) * float(max_speech_duration_s))
     )
 
     segments: list[dict[str, int]] = []

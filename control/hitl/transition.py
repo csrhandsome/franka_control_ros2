@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import queue
 import threading
@@ -12,6 +13,8 @@ import websockets.exceptions
 import websockets.sync.client
 
 from control.util import msgpack_numpy
+
+logger = logging.getLogger(__name__)
 
 
 class TransitionClient:
@@ -44,19 +47,19 @@ class TransitionClient:
     def _wait_for_server(
         self, timeout: float | None = None
     ) -> tuple[websockets.sync.client.ClientConnection, dict[str, Any]]:
-        logging.info("[HITL] Waiting for transition sink at %s", self._uri)
+        logger.info("[HITL] Waiting for transition sink at %s", self._uri)
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             try:
                 conn, metadata = self._connect()
-                logging.info("[HITL] Connected to transition sink %s", self._uri)
+                logger.info("[HITL] Connected to transition sink %s", self._uri)
                 return conn, metadata
             except (ConnectionRefusedError, OSError, TimeoutError):
                 if deadline is not None and time.monotonic() >= deadline:
                     raise ConnectionRefusedError(
                         f"Timed out waiting for transition sink at {self._uri}"
                     ) from None
-                logging.info("[HITL] Still waiting for %s", self._uri)
+                logger.info("[HITL] Still waiting for %s", self._uri)
                 time.sleep(1.0)
 
     def send(self, message: dict[str, Any]) -> dict[str, Any]:
@@ -69,14 +72,13 @@ class TransitionClient:
             self._ws.send(data)
             response = self._ws.recv()
         if isinstance(response, str):
-            raise RuntimeError(f"Transition sink error:\n{response}")
+            # A string response is an error message from the server protocol.
+            raise RuntimeError(f"Transition sink error:\n{response}")  # noqa: TRY004
         return msgpack_numpy.unpackb(response)
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self._ws.close()
-        except Exception:
-            pass
 
 
 class AsyncTransitionSink:
@@ -130,7 +132,7 @@ class AsyncTransitionSink:
         try:
             self._queue.put(("stop", None), timeout=1.0)
         except queue.Full:
-            logging.error("[HITL] transition queue did not drain before shutdown")
+            logger.error("[HITL] transition queue did not drain before shutdown")
         self._thread.join(timeout=2.0)
         self._client.close()
         if self._thread.is_alive():

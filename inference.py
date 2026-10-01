@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Run a Franka Cartesian policy and robot command loop at 30 Hz.
 
 The policy server must serve a pi0_base_ee_ros_30hz checkpoint. Its actions
@@ -20,12 +19,16 @@ from typing import Any
 import numpy as np
 
 from control.robot_config import config_path, load_mapping, section
-from control.robot_state import EEPose, quat_angle_xyzw
+from control.robot_state import EEPose
+from control.util.pose import quat_angle_xyzw
+
+logger = logging.getLogger(__name__)
 
 ACTION_FPS = 30.0
 ACTION_HORIZON = 16
 ACTION_DIM = 7
 IMAGE_HW = 224
+WARMUP_CHUNKS = 5
 PERIOD_NS = round(1e9 / ACTION_FPS)
 GRIPPER_OPEN_WIDTH_M = 0.05
 GRIPPER_OPEN_THRESHOLD_M = GRIPPER_OPEN_WIDTH_M / 2
@@ -40,7 +43,7 @@ class ActionPlan:
 def validate_policy_metadata(metadata: dict[str, Any]) -> None:
     """Reject a server running a checkpoint with different action timing."""
     if not isinstance(metadata, dict):
-        raise ValueError("Policy server did not provide metadata")
+        raise TypeError("Policy server did not provide metadata")
     try:
         fps = float(metadata["action_fps"])
         horizon = int(metadata["action_horizon"])
@@ -96,6 +99,27 @@ def parse_action_plan(response: dict[str, Any], observation_ns: int) -> ActionPl
     return ActionPlan(observation_ns=observation_ns, actions=actions)
 
 
+def warmup_policy(policy: Any) -> None:
+    """Request and discard five chunks before starting the robot inference loop."""
+    blank_image = np.zeros((IMAGE_HW, IMAGE_HW, 3), dtype=np.uint8)
+    blank_observation = build_observation(
+        blank_image,
+        blank_image,
+        np.zeros(6, dtype=np.float32),
+        0.0,
+        "",
+        0,
+    )
+    for request_index in range(WARMUP_CHUNKS):
+        try:
+            parse_action_plan(policy.infer(blank_observation), observation_ns=0)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Policy warmup failed on request {request_index + 1}/{WARMUP_CHUNKS}"
+            ) from exc
+    logger.info("Policy warmup completed: %d action chunks", WARMUP_CHUNKS)
+
+
 def action_at(plan: ActionPlan, now_ns: int) -> tuple[np.ndarray | None, int]:
     """The first predicted target is for observation time + 1/30 second."""
     index = (now_ns - plan.observation_ns) // PERIOD_NS - 1
@@ -126,8 +150,9 @@ def checked_ee_target(
 class PolicyWorker:
     """Keep WebSocket inference off the fixed-rate robot command loop."""
 
-    def __init__(self, policy: Any) -> None:
+    def __init__(self, policy: Any, *, parse_response=parse_action_plan) -> None:
         self._policy = policy
+        self._parse_response = parse_response
         self._requests: queue.Queue[tuple[dict[str, Any], int] | None] = queue.Queue(
             maxsize=1
         )
@@ -166,7 +191,7 @@ class PolicyWorker:
                 return
             observation, observation_ns = request
             try:
-                plan = parse_action_plan(
+                plan = self._parse_response(
                     self._policy.infer(observation), observation_ns
                 )
             except BaseException as exc:
@@ -188,7 +213,9 @@ def _command_gripper(
     arm: Any, target_open: float, last_open: float | None
 ) -> float | None:
     if not np.isfinite(target_open) or not 0.0 <= target_open <= 1.0:
-        raise ValueError(f"Policy logical gripper target outside 0..1: {target_open:.3f}")
+        raise ValueError(
+            f"Policy logical gripper target outside 0..1: {target_open:.3f}"
+        )
     if arm.gripper_busy:
         return last_open
     command = float(target_open >= 0.5)
@@ -254,7 +281,17 @@ def run(
     arm = None
     worker = None
     try:
+        if policy.server_metadata.get("rlt_actor_protocol"):
+            run_force_rlt(
+                config,
+                policy=policy,
+                prompt=task,
+                max_steps=step_limit,
+                move_to_start=move_to_start,
+            )
+            return
         validate_policy_metadata(policy.server_metadata)
+        warmup_policy(policy)
         cameras = DualRealsenseManagerRos(
             external_topic=str(camera_cfg.external_image_topic),
             wrist_topic=str(camera_cfg.wrist_image_topic),
@@ -272,7 +309,9 @@ def run(
             start_joint_position=list(robot_cfg.start_joint_position),
         )
         if not arm.joint_state_ready or not arm.ee_pose_ready:
-            raise RuntimeError("No measured joint or EE state; refusing to run inference")
+            raise RuntimeError(
+                "No measured joint or EE state; refusing to run inference"
+            )
         if move_to_start or bool(inference_cfg.move_to_start):
             arm.move_to_start()
         arm.start_ee_streaming()
@@ -284,7 +323,7 @@ def run(
         last_gripper_open: float | None = None
         tick_ns = time.monotonic_ns()
         steps = 0
-        logging.info(
+        logger.info(
             "Inference started: prompt=%r, 30 Hz, max_steps=%s", task, step_limit
         )
 
@@ -311,12 +350,16 @@ def run(
                 plan = new_plan
             action, index = action_at(plan, now_ns) if plan is not None else (None, 0)
             if action is None:
-                arm.set_ee_control(current_ee.xyz_m, current_ee.quaternion_xyzw(), current_joints)
+                arm.set_ee_control(
+                    current_ee.xyz_m, current_ee.quaternion_xyzw(), current_joints
+                )
             else:
                 desired_ee = checked_ee_target(
                     action, current_ee, translation_limit, rotation_limit
                 )
-                arm.set_ee_control(desired_ee.xyz_m, desired_ee.quaternion_xyzw(), current_joints)
+                arm.set_ee_control(
+                    desired_ee.xyz_m, desired_ee.quaternion_xyzw(), current_joints
+                )
                 last_gripper_open = _command_gripper(
                     arm, float(action[6]), last_gripper_open
                 )
@@ -329,8 +372,7 @@ def run(
                     wrist,
                     current_ee.vector,
                     float(
-                        float(measured["gripper_position"])
-                        >= GRIPPER_OPEN_THRESHOLD_M
+                        float(measured["gripper_position"]) >= GRIPPER_OPEN_THRESHOLD_M
                     ),
                     task,
                     steps,
@@ -349,7 +391,7 @@ def run(
                     hold.xyz_m, hold.quaternion_xyzw(), current_state["joint_positions"]
                 )
             except Exception:
-                logging.exception("Failed to hold current joint position")
+                logger.exception("Failed to hold current joint position")
         try:
             if worker is not None:
                 worker.close()
@@ -362,6 +404,305 @@ def run(
             finally:
                 if cameras is not None:
                     cameras.close()
+
+
+@dataclass(frozen=True)
+class ForceActionPlan:
+    observation_ns: int
+    actions: np.ndarray
+    ref_q: np.ndarray
+
+
+def validate_force_metadata(metadata: dict[str, Any]) -> tuple[str, int]:
+    """Check that the single server loaded a matching VLA, readout, and actor."""
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("rlt_protocol") != "pytorch-rl-token-v1"
+        or metadata.get("rlt_actor_protocol") != "pytorch-force-rlt-actor-v1"
+        or metadata.get("action_space") != "joint"
+        or not np.isclose(float(metadata.get("action_fps", 0)), ACTION_FPS)
+        or int(metadata.get("action_horizon", 0)) != ACTION_HORIZON
+        or int(metadata.get("prediction_horizon", 0)) != ACTION_HORIZON
+        or int(metadata.get("action_dim", 0)) != 7
+        or int(metadata.get("physical_joint_dim", 0)) != 7
+        or metadata.get("group") not in ("B", "C")
+        or not metadata.get("actor_sha256")
+    ):
+        raise ValueError("Incompatible force RLT server metadata")
+    execution_horizon = int(metadata.get("execution_horizon", 0))
+    if not 0 < execution_horizon <= ACTION_HORIZON:
+        raise ValueError("Invalid force RLT execution horizon")
+    return str(metadata["group"]), execution_horizon
+
+
+def build_force_observation(
+    front: np.ndarray,
+    wrist: np.ndarray,
+    joints: np.ndarray,
+    tcp: np.ndarray,
+    gripper_open: float,
+    prompt: str,
+    observation_ns: int,
+    step_id: int,
+) -> dict[str, Any]:
+    """Send the joint-policy inputs plus the readout's timestamp and TCP anchor."""
+    front = np.asarray(front)
+    wrist = np.asarray(wrist)
+    joints = np.asarray(joints, dtype=np.float32)
+    tcp = np.asarray(tcp, dtype=np.float32)
+    if any(
+        image.shape != (IMAGE_HW, IMAGE_HW, 3) or image.dtype != np.uint8
+        for image in (front, wrist)
+    ):
+        raise ValueError("Force RLT cameras must provide 224x224x3 uint8 RGB")
+    if joints.shape != (7,) or not np.isfinite(joints).all():
+        raise ValueError("Measured joints must be finite with shape (7,)")
+    if (
+        tcp.shape != (4, 4)
+        or not np.isfinite(tcp).all()
+        or not np.allclose(tcp[3], [0, 0, 0, 1])
+    ):
+        raise ValueError("Measured O_T_TCP must be a finite homogeneous 4x4 matrix")
+    if not np.isfinite(gripper_open) or not 0 <= gripper_open <= 1:
+        raise ValueError("Logical gripper observation must be in 0..1")
+    return {
+        "observation/exterior_image_1_left": front.copy(),
+        "observation/wrist_image_left": wrist.copy(),
+        "observation/joint_position": joints.copy(),
+        "observation/gripper_position": np.array([gripper_open], dtype=np.float32),
+        "prompt": prompt,
+        "monotonic_ts": np.array(observation_ns / 1e9, dtype=np.float64),
+        "O_T_TCP": tcp.copy(),
+        "step_id": step_id,
+    }
+
+
+def parse_force_action_plan(
+    response: dict[str, Any], observation_ns: int, metadata: dict[str, Any]
+) -> ForceActionPlan:
+    """Use actor proposals only when they belong to this server and observation."""
+    group, _ = validate_force_metadata(metadata)
+    if not isinstance(response, dict) or response.get("group") != group:
+        raise ValueError("Force RLT response group mismatch")
+    if response.get("actor_sha256") != metadata["actor_sha256"]:
+        raise ValueError("Force RLT actor hash mismatch")
+    timestamp = np.asarray(response.get("ref_obs_ts", np.nan), dtype=np.float64)
+    if (
+        timestamp.shape != ()
+        or not np.isfinite(timestamp)
+        or abs(float(timestamp) - observation_ns / 1e9) > 1e-6
+    ):
+        raise ValueError("Force RLT reference observation timestamp mismatch")
+    anchor = np.asarray(response.get("ref_anchor_TCP", []), dtype=np.float64)
+    if anchor.shape != (4, 4) or not np.isfinite(anchor).all():
+        raise ValueError("Force RLT reference TCP anchor is missing")
+    actions = np.asarray(response.get("proposed_q", []), dtype=np.float32)
+    ref_q = np.asarray(response.get("ref_q", []), dtype=np.float32)
+    for name, value in (("proposed_q", actions), ("ref_q", ref_q)):
+        if value.shape != (ACTION_HORIZON, 7) or not np.isfinite(value).all():
+            raise ValueError(f"Force RLT {name} must be finite with shape (16, 7)")
+    return ForceActionPlan(observation_ns, actions, ref_q)
+
+
+def checked_force_target(
+    target: np.ndarray,
+    reference: np.ndarray,
+    measured: np.ndarray,
+    *,
+    joint_lower: np.ndarray,
+    joint_upper: np.ndarray,
+    max_step: np.ndarray,
+    reference_radius: np.ndarray,
+) -> np.ndarray:
+    """Bound a joint proposal before a fake-hardware command."""
+    target = np.asarray(target, dtype=np.float64)
+    reference = np.asarray(reference, dtype=np.float64)
+    measured = np.asarray(measured, dtype=np.float64)
+    if any(
+        value.shape != (7,) or not np.isfinite(value).all()
+        for value in (target, reference, measured)
+    ):
+        raise ValueError("Force RLT joint vectors must be finite with shape (7,)")
+    if (
+        np.any(target < joint_lower)
+        or np.any(target > joint_upper)
+        or np.any(np.abs(target - measured) > max_step)
+        or np.any(np.abs(target - reference) > reference_radius)
+    ):
+        raise ValueError("Force RLT proposal exceeds configured joint bounds")
+    return target
+
+
+def run_force_rlt(
+    config: dict[str, Any],
+    *,
+    policy: Any,
+    prompt: str,
+    max_steps: int,
+    move_to_start: bool,
+) -> None:
+    """Query the merged server; hold the robot unless fake-hardware execution is enabled."""
+    from control.dual_camera_manager_ros import DualRealsenseManagerRos
+    from control.recording_writer import FreshCameraPair
+    from control.robotic_arm_controller_ros import RoboticArmControlerRos
+
+    group, execution_horizon = validate_force_metadata(policy.server_metadata)
+    if group == "C":
+        raise RuntimeError(
+            "C requires synchronized finger-history features; this inference client has no finger camera pipeline"
+        )
+    inference_cfg = section(config, "inference")
+    force_cfg = section(config, "force_rlt")
+    camera_cfg = section(config, "camera")
+    robot_cfg = section(config, "robot")
+    execute = bool(getattr(force_cfg, "execute_joint_targets", False))
+    if execute and not bool(robot_cfg.use_fake_hardware):
+        raise RuntimeError(
+            "Real-hardware force RLT execution requires a calibrated TCP/IK safety projector"
+        )
+    limits = None
+    if execute:
+        names = (
+            "joint_lower",
+            "joint_upper",
+            "max_joint_step_rad",
+            "reference_radius_rad",
+        )
+        limits = {}
+        for name in names:
+            value = np.asarray(getattr(force_cfg, name), dtype=np.float64)
+            if value.shape != (7,) or not np.isfinite(value).all():
+                raise ValueError(f"force_rlt.{name} must contain seven finite values")
+            limits[name] = value
+        if np.any(limits["joint_lower"] >= limits["joint_upper"]) or any(
+            np.any(limits[name] <= 0)
+            for name in ("max_joint_step_rad", "reference_radius_rad")
+        ):
+            raise ValueError("Invalid force RLT joint limits")
+    if str(camera_cfg.camera_backend) != "ros" or int(camera_cfg.image_hw) != IMAGE_HW:
+        raise ValueError("Force RLT requires ROS 224x224 cameras")
+    if not np.isclose(float(camera_cfg.camera_fps), ACTION_FPS):
+        raise ValueError("Force RLT requires 30 Hz cameras")
+    replan_steps = min(int(inference_cfg.replan_every_steps), execution_horizon)
+    if replan_steps <= 0:
+        raise ValueError("Force RLT replanning interval must be positive")
+    max_age_ns = round(float(getattr(force_cfg, "max_ref_age_s", 0.2)) * 1e9)
+    camera_age_ns = round(float(inference_cfg.max_camera_age_s) * 1e9)
+    if max_age_ns <= 0 or camera_age_ns <= 0:
+        raise ValueError("Force RLT reference and camera age limits must be positive")
+    cameras = None
+    arm = None
+    worker = None
+    try:
+        cameras = DualRealsenseManagerRos(
+            external_topic=str(camera_cfg.external_image_topic),
+            wrist_topic=str(camera_cfg.wrist_image_topic),
+            external_serial=str(camera_cfg.external_camera_serial),
+            wrist_serial=str(camera_cfg.wrist_camera_serial),
+            crop_scale=float(camera_cfg.crop_scale),
+            out_hw=IMAGE_HW,
+            refresh_hz=ACTION_FPS,
+            enabled=True,
+        )
+        cameras.wait_for_frames(timeout_s=float(camera_cfg.camera_startup_timeout_s))
+        arm = RoboticArmControlerRos(
+            use_fake_hardware=bool(robot_cfg.use_fake_hardware),
+            robot_type=str(robot_cfg.robot_type),
+            start_joint_position=list(robot_cfg.start_joint_position),
+        )
+        if not arm.joint_state_ready or not arm.ee_pose_ready:
+            raise RuntimeError("Measured joint/TCP state is unavailable")
+        if move_to_start or bool(inference_cfg.move_to_start):
+            arm.move_to_start()
+        arm.start_joint_streaming()
+        worker = PolicyWorker(
+            policy,
+            parse_response=lambda response, stamp: parse_force_action_plan(
+                response, stamp, policy.server_metadata
+            ),
+        )
+        fresh_pair = FreshCameraPair()
+        plan: ForceActionPlan | None = None
+        tick_ns = time.monotonic_ns()
+        steps = 0
+        logger.info("Force RLT %s started: execute_joint_targets=%s", group, execute)
+        while max_steps <= 0 or steps < max_steps:
+            now_ns = time.monotonic_ns()
+            if now_ns < tick_ns:
+                time.sleep((tick_ns - now_ns) / 1e9)
+            front, wrist, front_ts, wrist_ts = cameras.get_frames()
+            now_ns = time.monotonic_ns()
+            if front is None or wrist is None or front_ts is None or wrist_ts is None:
+                raise RuntimeError(
+                    "Camera frames unavailable during force RLT inference"
+                )
+            front_ns = int(front_ts.host_capture_monotonic_ns)
+            wrist_ns = int(wrist_ts.host_capture_monotonic_ns)
+            if any(
+                stamp > now_ns or now_ns - stamp > camera_age_ns
+                for stamp in (front_ns, wrist_ns)
+            ):
+                raise RuntimeError("Camera frame stale during force RLT inference")
+            measured = arm.state
+            q = np.asarray(measured["joint_positions"], dtype=np.float64)
+            tcp = np.asarray(measured["end_effector_pose"], dtype=np.float32)
+            if q.shape != (7,) or not np.isfinite(q).all():
+                raise RuntimeError("Measured joints are invalid")
+            if tcp.shape != (4, 4) or not np.isfinite(tcp).all():
+                raise RuntimeError("Measured TCP pose is invalid")
+            new_plan = worker.take_result()
+            if new_plan is not None:
+                plan = new_plan
+            index = (
+                -1 if plan is None else (now_ns - plan.observation_ns) // PERIOD_NS - 1
+            )
+            target = q
+            if (
+                plan is not None
+                and 0 <= index < execution_horizon
+                and now_ns - plan.observation_ns <= max_age_ns
+                and execute
+            ):
+                target = checked_force_target(
+                    plan.actions[index],
+                    plan.ref_q[index],
+                    q,
+                    joint_lower=limits["joint_lower"],
+                    joint_upper=limits["joint_upper"],
+                    max_step=limits["max_joint_step_rad"],
+                    reference_radius=limits["reference_radius_rad"],
+                )
+            arm.set_joint_control(target)
+            if (plan is None or index >= replan_steps) and fresh_pair.accept(
+                front_ns, wrist_ns
+            ):
+                observation = build_force_observation(
+                    front,
+                    wrist,
+                    q,
+                    tcp,
+                    float(
+                        float(measured["gripper_position"]) >= GRIPPER_OPEN_THRESHOLD_M
+                    ),
+                    prompt,
+                    now_ns,
+                    steps,
+                )
+                worker.submit(observation, now_ns)
+            steps += 1
+            tick_ns = max(tick_ns + PERIOD_NS, time.monotonic_ns() + PERIOD_NS)
+    finally:
+        if arm is not None:
+            try:
+                arm.set_joint_control(arm.state["joint_positions"])
+            except Exception:
+                logger.exception("Failed to hold measured joints")
+        if worker is not None:
+            worker.close()
+        if arm is not None:
+            arm.cleanup()
+        if cameras is not None:
+            cameras.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -400,7 +741,7 @@ def main(argv: list[str] | None = None) -> int:
             move_to_start=args.move_to_start,
         )
     except KeyboardInterrupt:
-        logging.info("Inference stopped by Ctrl+C")
+        logger.info("Inference stopped by Ctrl+C")
     return 0
 
 

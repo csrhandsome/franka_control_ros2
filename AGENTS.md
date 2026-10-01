@@ -18,4 +18,11 @@
 - The `openpi-force` training job and policy WebSocket server run separately in a GPU environment. The ROS inference container connects to that server through `config/inference/franka.yaml` or its CLI host/port options; it does not host the model.
 - Collection records robot state and actions at about 100 Hz and camera frames at 30 Hz. Training aligns these streams to 30 Hz; plain policy inference also runs at 30 Hz. Do not infer a 100 Hz inference loop from the collection rate.
 
+## Jazzy + LeRobot 0.6.1 experiment
+
+- `ros2_ws/docker/franka_jazzy/` is an isolated ROS 2 Jazzy / Python 3.12 image for checking the latest LeRobot dataset API. It is not the deployment runtime: Humble remains the collection and inference environment, and neither the Humble configuration nor the training repository's LeRobot version is affected. See that directory's `README.md`.
+- Its synthetic smoke test checks the Jazzy `rclpy` and `cv_bridge` imports, then creates, reads back, and resumes a LeRobot v3 dataset with the collector's core feature schema. It does not connect to a robot. The image rebuilds `cv_bridge` 4.1.0 against NumPy 2 because Jazzy's prebuilt extension uses the NumPy 1 ABI.
+- Re-run it from the repository root with `bash ros2_ws/docker/franka_jazzy/scripts/compose_safe.sh run --rm franka_jazzy python ros2_ws/docker/franka_jazzy/scripts/smoke_test.py` (build the image once first with the same wrapper's `build`). The wrapper reuses the host settings in `franka_humble/.env` but has its own image, Compose project, Python environment, and temporary test dataset; the project mount is read-only, and there is no USB device mapping or `franka_ros2` bringup.
+- The current collector cannot switch to Jazzy yet: `tests/docker_recording_smoke.py` still imports `lerobot.common.datasets`, which LeRobot 0.6.1 removed. Do not present the Jazzy image as a drop-in replacement until that migration is done.
+
 When giving startup, test, or deployment instructions for this repository, include the appropriate Docker wrapper commands without waiting for the user to remind you.

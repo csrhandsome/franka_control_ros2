@@ -114,7 +114,7 @@ def decode_image(
     if isinstance(value, (bytes, bytearray)):
         try:
             return np.asarray(Image.open(BytesIO(value)).convert("RGB"))
-        except Exception:
+        except (OSError, ValueError, TypeError):
             return None
 
     if isinstance(value, dict):
@@ -122,7 +122,7 @@ def decode_image(
         if bytes_data:
             try:
                 return np.asarray(Image.open(BytesIO(bytes_data)).convert("RGB"))
-            except Exception:
+            except (OSError, ValueError, TypeError):
                 return None
         path = value.get("path")
         if path:
@@ -141,7 +141,7 @@ def decode_image(
             if candidate.exists():
                 try:
                     return np.asarray(Image.open(candidate).convert("RGB"))
-                except Exception:
+                except (OSError, ValueError, TypeError):
                     return None
     return None
 
@@ -187,8 +187,8 @@ def center_crop_and_resize_rgb_uint8(
     except Exception:
         h, w = int(rgb.shape[0]), int(rgb.shape[1])
         frac = float(np.sqrt(float(crop_scale)))
-        crop_h = max(1, min(h, int(round(h * frac))))
-        crop_w = max(1, min(w, int(round(w * frac))))
+        crop_h = max(1, min(h, round(h * frac)))
+        crop_w = max(1, min(w, round(w * frac)))
         y0 = max(0, (h - crop_h) // 2)
         x0 = max(0, (w - crop_w) // 2)
         cropped = rgb[y0 : y0 + crop_h, x0 : x0 + crop_w]

@@ -4,6 +4,7 @@
 #   gripper.gripper_type: franka | dh5 | none
 
 dataset:
+  lerobot_format: v2 # v2: Humble / LeRobot 0.1; v3: Jazzy / LeRobot 0.6.1
   repo_id: "openpi/franka_lerobot"
   date: "test"
   action_space: ee # ee: 6D base-frame pose + gripper (7D); joint: 7 joints + gripper (8D)

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """路线标注：straight/detour 的配对分叉检测与 6_28 标签回填。
 
 两个子命令写的是 `audio/episode_*.sync.json` 里**互补**的字段，互不覆盖，
@@ -110,7 +109,7 @@ def _load_trajectory(
     audio_start_ns = sync.get("audio_start_monotonic_ns")
     try:
         audio_start_ns = int(audio_start_ns) if audio_start_ns is not None else None
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         audio_start_ns = None
     fps = meta.safe_float(sync.get("control_frequency")) or fallback_fps
 
@@ -126,7 +125,7 @@ def _load_trajectory(
         host_ns = record.get("host_frame_monotonic_ns")
         try:
             host_ns = int(host_ns) if host_ns is not None else None
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             host_ns = None
         if audio_start_ns is not None and host_ns is not None:
             t = float(host_ns - audio_start_ns) / 1e9
@@ -318,7 +317,7 @@ def _vad_audio_duration(sync_data: dict[str, Any]) -> float | None:
     value = metadata.get("audio_duration_sec")
     try:
         return float(value) if value is not None else None
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 

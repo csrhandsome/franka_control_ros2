@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """从 VAD 元数据推导 instruction audio window。
 
 原始 VAD 结果留在 ``vad_segments`` 里；这里写入派生的

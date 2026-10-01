@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """ROS 2 Humble Franka adapter. Runs in the Humble Docker image only.
 
 Uses ROS 2 topics, actions, and services for robot control.
@@ -16,6 +15,8 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import numpy as np
+
+from control.util.pose import matrix_to_pose6, position_quat_to_matrix
 
 try:
     import rclpy
@@ -56,42 +57,6 @@ def _as_joint_vector(values: Sequence[float], *, name: str) -> np.ndarray:
     if vector.shape != (7,):
         raise ValueError(f"{name} must be 7D, got shape {vector.shape}")
     return vector
-
-
-def _quat_to_matrix(quat_xyzw: np.ndarray) -> np.ndarray:
-    x, y, z, w = [float(v) for v in quat_xyzw]
-    n = math.sqrt(x * x + y * y + z * z + w * w)
-    if n < 1e-12:
-        x, y, z, w = 0.0, 0.0, 0.0, 1.0
-    else:
-        x, y, z, w = x / n, y / n, z / n, w / n
-    return np.array(
-        [
-            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-        ],
-        dtype=np.float64,
-    )
-
-
-def _matrix_to_rpy(rotation: np.ndarray) -> np.ndarray:
-    r21 = float(rotation[2, 0])
-    pitch = math.asin(float(np.clip(-r21, -1.0, 1.0)))
-    if abs(math.cos(pitch)) < 1e-6:
-        roll = 0.0
-        yaw = math.atan2(-float(rotation[0, 1]), float(rotation[1, 1]))
-    else:
-        roll = math.atan2(float(rotation[2, 1]), float(rotation[2, 2]))
-        yaw = math.atan2(float(rotation[1, 0]), float(rotation[0, 0]))
-    return np.array([roll, pitch, yaw], dtype=np.float64)
-
-
-def _pose_to_matrix(position: np.ndarray, quat_xyzw: np.ndarray) -> np.ndarray:
-    matrix = np.eye(4, dtype=np.float64)
-    matrix[:3, :3] = _quat_to_matrix(quat_xyzw)
-    matrix[:3, 3] = np.asarray(position, dtype=np.float64).reshape(3)
-    return matrix
 
 
 @dataclass
@@ -434,7 +399,10 @@ class RoboticArmControlerRos:
 
     @property
     def ee_streaming_active(self) -> bool:
-        return self._ee_streaming and self._active_arm_controller == "cartesian_pose_target_controller"
+        return (
+            self._ee_streaming
+            and self._active_arm_controller == "cartesian_pose_target_controller"
+        )
 
     def set_ee_control(
         self,
@@ -658,7 +626,7 @@ class RoboticArmControlerRos:
         with self._state_lock:
             qpos = self._joint_positions.copy()
             dq = self._joint_velocities.copy()
-            pose = _pose_to_matrix(self._last_ee_pos, self._last_ee_quat)
+            pose = position_quat_to_matrix(self._last_ee_pos, self._last_ee_quat)
             gripper = float(self._gripper_position)
         return {
             "joint_positions": qpos,
@@ -675,14 +643,16 @@ class RoboticArmControlerRos:
     @property
     def pose(self) -> np.ndarray:
         matrix = self.state["end_effector_pose"]
-        return np.concatenate([matrix[:3, 3], _matrix_to_rpy(matrix[:3, :3])])
+        return matrix_to_pose6(matrix)
 
     def hold_current_pose(self) -> None:
-        if self._active_arm_controller != "cartesian_pose_target_controller":
-            if not self._activate_arm_controller("cartesian_pose_target_controller"):
-                self._activate_arm_controller("joint_position_target_controller")
-                self._publish_joint_target(self._current_qpos())
-                return
+        if (
+            self._active_arm_controller != "cartesian_pose_target_controller"
+            and not self._activate_arm_controller("cartesian_pose_target_controller")
+        ):
+            self._activate_arm_controller("joint_position_target_controller")
+            self._publish_joint_target(self._current_qpos())
+            return
         pos, quat = self._current_ee_pose()
         self.set_ee_control(pos, quat, self._current_qpos())
 

@@ -4,6 +4,9 @@ version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "lerobot[dataset]==0.6.1",
+    "pyyaml>=6.0.1",
+    "scipy>=1.14",
+    "websockets>=12.0",
     "torch==2.7.1+cpu",
     "torchvision==0.22.1+cpu",
     "torchcodec==0.3.0",

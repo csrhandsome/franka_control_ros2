@@ -86,6 +86,12 @@ robot = config.get("robot", {})
 camera = config.get("camera", {})
 gripper = config.get("gripper", {})
 dataset = config.get("dataset", {})
+dataset_format = str(dataset.get("lerobot_format", "v2")).strip().lower()
+if dataset_format != "v2":
+    raise ValueError(
+        "collect.sh starts the Humble image and requires dataset.lerobot_format: v2; "
+        "the Jazzy image does not have robot bringup yet"
+    )
 backend = str(camera.get("camera_backend", "none")).lower()
 kind = str(gripper.get("gripper_type", "franka")).lower()
 if backend not in {"ros", "none"}:

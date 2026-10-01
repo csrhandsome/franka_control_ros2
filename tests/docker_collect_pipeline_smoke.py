@@ -1,8 +1,8 @@
-#!/usr/bin/env python3
 """Run vr_collect end to end with synthetic inputs and the real LeRobot writer."""
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import tempfile
@@ -15,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import yaml
-from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
 import vr_collect
 from control.dual_camera_manager_ros import CameraFrameTimestamps
@@ -126,7 +125,12 @@ class FakeCameras:
         pass
 
 
-def run_case(action_space: str) -> None:
+def run_case(action_space: str, backend: str) -> None:
+    if backend == "jazzy":
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    else:
+        from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+
     with tempfile.TemporaryDirectory(prefix="franka-collect-smoke-") as tmp:
         root = Path(tmp)
         config = yaml.safe_load(
@@ -134,9 +138,18 @@ def run_case(action_space: str) -> None:
                 Path(__file__).resolve().parents[1] / "config/collect/franka.yaml"
             ).read_text()
         )
+        selected_format = "v3" if backend == "jazzy" else "v2"
+        config_format = (
+            selected_format
+            if action_space == "ee"
+            else ("v2" if selected_format == "v3" else "v3")
+        )
         config["dataset"].update(
-            repo_id="smoke/franka", date="test", enable_logging=True,
+            repo_id="smoke/franka",
+            date="test",
+            enable_logging=True,
             action_space=action_space,
+            lerobot_format=config_format,
         )
         config["camera"].update(camera_backend="ros", image_hw=64)
         config["robot"]["use_fake_hardware"] = True
@@ -144,12 +157,16 @@ def run_case(action_space: str) -> None:
         config_path = root / "collect.yaml"
         config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
+        argv = ["vr_collect.py", "--config", str(config_path)]
+        if action_space == "joint":
+            argv.extend(["--lerobot-format", selected_format])
+
         with (
             patch.object(vr_collect, "__file__", str(root / "vr_collect.py")),
             patch.object(vr_collect, "RoboticArmControlerRos", FakeArm),
             patch.object(vr_collect, "VRInputRos", FakeVR),
             patch.object(vr_collect, "DualRealsenseManagerRos", FakeCameras),
-            patch.object(sys, "argv", ["vr_collect.py", "--config", str(config_path)]),
+            patch.object(sys, "argv", argv),
         ):
             vr_collect.main()
 
@@ -159,7 +176,10 @@ def run_case(action_space: str) -> None:
         actions = (
             (dataset_root / "episode_000000.actions.jsonl").read_text().splitlines()
         )
-        replay = LeRobotDataset(repo_id="smoke/franka_test", root=dataset_root)
+        read_options = {"video_backend": "pyav"} if backend == "jazzy" else {}
+        replay = LeRobotDataset(
+            repo_id="smoke/franka_test", root=dataset_root, **read_options
+        )
         assert info["total_episodes"] == 1, info
         assert len(replay) == sync["video_frames"] > 0
         assert len(actions) == sync["action_records"] > 0
@@ -168,10 +188,18 @@ def run_case(action_space: str) -> None:
         assert sync["action_target_offset_frames"] == 1
         assert tuple(replay[0]["ee_pose"].shape) == (6,)
         assert tuple(replay[0]["joint_position"].shape) == (7,)
-        assert tuple(replay[0]["actions"].shape) == ((7,) if action_space == "ee" else (8,))
-        assert info["features"]["actions"]["shape"] == ([7] if action_space == "ee" else [8])
+        assert tuple(replay[0]["actions"].shape) == (
+            (7,) if action_space == "ee" else (8,)
+        )
+        assert info["features"]["actions"]["shape"] == (
+            [7] if action_space == "ee" else [8]
+        )
         next_frame = replay[1]
-        expected_arm = next_frame["ee_pose"] if action_space == "ee" else next_frame["joint_position"]
+        expected_arm = (
+            next_frame["ee_pose"]
+            if action_space == "ee"
+            else next_frame["joint_position"]
+        )
         np.testing.assert_allclose(replay[0]["actions"][:-1], expected_arm, atol=1e-6)
         np.testing.assert_allclose(
             replay[0]["actions"][-1],
@@ -183,8 +211,11 @@ def run_case(action_space: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", choices=("humble", "jazzy"), default="humble")
+    backend = parser.parse_args().backend
     for action_space in ("ee", "joint"):
-        run_case(action_space)
+        run_case(action_space, backend)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import math
 import shutil
 import wave
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +25,7 @@ class EpisodeAudioSegment:
 
 
 def default_microphone_output_path(*, base_dir: Path | None = None) -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(UTC).astimezone().strftime("%Y%m%d_%H%M%S")
     root = Path.cwd() if base_dir is None else Path(base_dir)
     return root / "recordings" / f"microphone_{timestamp}.wav"
 
@@ -32,7 +33,7 @@ def default_microphone_output_path(*, base_dir: Path | None = None) -> Path:
 def block_frames_for_sample_rate(
     sample_rate: int, *, block_duration_s: float = 0.05
 ) -> int:
-    return max(256, int(round(int(sample_rate) * float(block_duration_s))))
+    return max(256, round(int(sample_rate) * float(block_duration_s)))
 
 
 def metadata_path_for_audio_output(output_path: Path) -> Path:
@@ -173,10 +174,8 @@ def discard_staged_audio_file(
 ) -> None:
     if staged_wav_path is None or not staged_is_temp:
         return
-    try:
+    with contextlib.suppress(Exception):
         staged_wav_path.unlink(missing_ok=True)
-    except Exception:
-        pass
 
 
 def save_staged_audio_recording(
@@ -265,20 +264,19 @@ def _resolve_preferred_input_device() -> int | str | None:
 
     valid_default = default_input if default_input not in (-1, None) else None
     if isinstance(valid_default, int):
-        try:
+        with contextlib.suppress(Exception):
             default_info = devices[valid_default]
             if int(
                 default_info.get("max_input_channels", 0)
             ) > 0 and _looks_like_usb_input_device(default_info.get("name")):
                 return valid_default
-        except Exception:
-            pass
 
     for index, device_info in enumerate(devices):
         try:
-            if int(device_info.get("max_input_channels", 0)) <= 0:
-                continue
-        except Exception:
+            input_channels = int(device_info.get("max_input_channels", 0))
+        except (AttributeError, TypeError, ValueError):
+            input_channels = 0
+        if input_channels <= 0:
             continue
         if _looks_like_usb_input_device(device_info.get("name")):
             return index
@@ -296,7 +294,7 @@ def _resolve_supported_input_sample_rate(
     import sounddevice as sd
 
     requested_rate = int(requested_sample_rate)
-    try:
+    with contextlib.suppress(Exception):
         sd.check_input_settings(
             device=input_device,
             samplerate=requested_rate,
@@ -304,12 +302,10 @@ def _resolve_supported_input_sample_rate(
             dtype=dtype_name,
         )
         return requested_rate
-    except Exception:
-        pass
 
     try:
         device_info = sd.query_devices(input_device)
-        fallback_rate = int(round(float(device_info["default_samplerate"])))
+        fallback_rate = round(float(device_info["default_samplerate"]))
     except Exception:
         sd.check_input_settings(
             device=input_device,
@@ -430,7 +426,7 @@ def _load_json(path: Path) -> dict | None:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
+    except (OSError, UnicodeError, ValueError) as exc:
         print(f"[Replay] Warning: failed to read JSON {path}: {exc}")
         return None
 
@@ -661,7 +657,7 @@ def _safe_int(value: object) -> int | None:
         if value is None:
             return None
         return int(value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -725,7 +721,7 @@ def _frame_range_to_audio_samples(
     if end_ns is None:
         last_ns = _safe_int(end_record.get("host_frame_monotonic_ns"))
         if last_ns is not None:
-            end_ns = last_ns + int(round(1e9 / fps_safe))
+            end_ns = last_ns + round(1e9 / fps_safe)
 
     if start_ns is None or end_ns is None or end_ns <= start_ns:
         return fallback_start, max(fallback_start, fallback_end)
@@ -818,7 +814,7 @@ def start_audio_playback(
         )
         return False
 
-    playback_rate = max(1, int(round(float(audio_segment.sample_rate) * float(speed))))
+    playback_rate = max(1, round(float(audio_segment.sample_rate) * float(speed)))
     try:
         sd.stop()
         play_audio(audio_segment.audio, sample_rate=playback_rate, blocking=False)
@@ -831,9 +827,7 @@ def start_audio_playback(
 def stop_audio_playback() -> None:
     try:
         import sounddevice as sd
-    except Exception:
+    except (ImportError, OSError):
         return
-    try:
+    with contextlib.suppress(Exception):
         sd.stop()
-    except Exception:
-        pass

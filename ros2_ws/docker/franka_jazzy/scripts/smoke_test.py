@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Check Jazzy and LeRobot 0.6.1 together with a synthetic local dataset."""
 
 import json
@@ -7,9 +6,9 @@ import tempfile
 from importlib.metadata import version
 from pathlib import Path
 
+import cv_bridge
 import numpy as np
 import rclpy
-import cv_bridge
 from cv_bridge import CvBridge
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
@@ -18,7 +17,9 @@ def main() -> None:
     assert sys.version_info[:2] == (3, 12), sys.version
     assert version("lerobot") == "0.6.1"
     assert rclpy.__file__.startswith("/opt/ros/jazzy/"), rclpy.__file__
-    assert cv_bridge.__file__.startswith("/opt/cv_bridge_ws/install/"), cv_bridge.__file__
+    assert cv_bridge.__file__.startswith("/opt/cv_bridge_ws/install/"), (
+        cv_bridge.__file__
+    )
 
     bridge = CvBridge()
     image = np.full((64, 64, 3), 127, dtype=np.uint8)
@@ -83,7 +84,9 @@ def main() -> None:
                     "exterior_image_2_left": image,
                     "wrist_image_left": image,
                     "joint_position": np.full(7, index, dtype=np.float32),
-                    "ee_pose": np.array([0.3, 0.0, 0.5, 0.0, 0.0, 0.0], dtype=np.float32),
+                    "ee_pose": np.array(
+                        [0.3, 0.0, 0.5, 0.0, 0.0, 0.0], dtype=np.float32
+                    ),
                     "gripper_position": np.array([0.5], dtype=np.float32),
                     "actions": np.full(8, index + 1, dtype=np.float32),
                     "task": "synthetic Jazzy test",
@@ -105,7 +108,9 @@ def main() -> None:
         assert tuple(sample["actions"].shape) == (8,)
         assert tuple(sample["exterior_image_1_left"].shape) == (3, 64, 64)
 
-        resumed = LeRobotDataset.resume(repo_id=repo_id, root=root, video_backend="pyav")
+        resumed = LeRobotDataset.resume(
+            repo_id=repo_id, root=root, video_backend="pyav"
+        )
         resumed.add_frame(
             {
                 "exterior_image_1_left": image,
@@ -120,7 +125,9 @@ def main() -> None:
         )
         resumed.save_episode()
         resumed.finalize()
-        assert len(LeRobotDataset(repo_id=repo_id, root=root, video_backend="pyav")) == 4
+        assert (
+            len(LeRobotDataset(repo_id=repo_id, root=root, video_backend="pyav")) == 4
+        )
         print("PASS: Jazzy rclpy/cv_bridge and LeRobot 0.6.1 create, read, resume")
 
 
