@@ -4,11 +4,14 @@
 set -eo pipefail
 
 source /opt/ros/humble/setup.bash
-if [[ -f /opt/franka_ros2_ws/install/setup.bash ]]; then
+if [[ -f /opt/panda_ws/install/setup.bash ]]; then
+  source /opt/panda_ws/install/setup.bash
+  export LD_LIBRARY_PATH="/opt/panda_libfranka/lib:${LD_LIBRARY_PATH:-}"
+elif [[ -f /opt/franka_ros2_ws/install/setup.bash ]]; then
   source /opt/franka_ros2_ws/install/setup.bash
-fi
-if [[ -f /opt/overlay_ws/install/setup.bash ]]; then
-  source /opt/overlay_ws/install/setup.bash
+  if [[ -f /opt/overlay_ws/install/setup.bash ]]; then
+    source /opt/overlay_ws/install/setup.bash
+  fi
 fi
 
 export UV_PROJECT="${UV_PROJECT:-/workspace/data_collect/ros2_ws/docker/franka_humble/python}"

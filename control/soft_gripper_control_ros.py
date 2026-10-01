@@ -24,7 +24,7 @@ except ImportError as exc:  # pragma: no cover
         "DH5GripperRos requires Humble rclpy. Run it inside the franka_humble container."
     ) from exc
 
-from typing import Self
+from typing_extensions import Self
 
 from control.dual_camera_manager_ros import DualRealsenseManagerRos
 

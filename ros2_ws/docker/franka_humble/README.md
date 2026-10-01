@@ -1,3 +1,26 @@
+## Panda / FER runtime override
+
+The active `Dockerfile.uv` now builds a persistent Panda driver in the image:
+LCAS/franka_arm_ros2 commit `6867bde68970104118d04ae853ddded15bf857fb`
+and libfranka 0.9.2 commit `f3b8d775a9c847cab32684c8a316f67867761674`.
+They are installed under `/opt/panda_ws` and `/opt/panda_libfranka`.
+The entrypoint prefers them over the inherited FR3 driver and does not load
+its incompatible collection overlay. No runtime compilation is required.
+The inherited base tag remains 2.5.1; it does not describe the active Panda driver.
+
+From the repository root, after preparing the base image and `.env` below:
+
+```bash
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh build franka_humble
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble bash -c 'exec ros2 launch franka_bringup franka.launch.py robot_ip:=$FRANKA_ROBOT_IP load_gripper:=true use_rviz:=false'
+```
+
+Enable FCI and unlock brakes in Desk before launch. This verifies bringup;
+`collect.sh` is not yet ported to the Panda driver's older controller interfaces.
+The driver permits a non-RT kernel via `RealtimeConfig::kIgnore` and emits a warning.
+
+---
+
 # Franka ROS 2 Humble container
 
 This is a headless, Linux-Docker configuration for an FR3-first setup. It pins:

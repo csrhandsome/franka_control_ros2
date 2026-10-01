@@ -7,7 +7,7 @@ import math
 import shutil
 import wave
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -25,7 +25,7 @@ class EpisodeAudioSegment:
 
 
 def default_microphone_output_path(*, base_dir: Path | None = None) -> Path:
-    timestamp = datetime.now(UTC).astimezone().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d_%H%M%S")
     root = Path.cwd() if base_dir is None else Path(base_dir)
     return root / "recordings" / f"microphone_{timestamp}.wav"
 
