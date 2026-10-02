@@ -73,10 +73,12 @@ bash "$safe_compose" run --rm -T --no-deps franka_humble \
   python -c '
 import pathlib
 import sys
-import yaml
+from control.robot_config import load_mapping
+from control.motion_config import workflow_motion_config
 
 path = pathlib.Path(sys.argv[1])
-config = yaml.safe_load(path.read_text(encoding="utf-8"))
+config = load_mapping(path)
+workflow_motion_config(config, control_mode=config.get("control", {}).get("control_mode", "ee"))
 if not isinstance(config, dict):
     raise ValueError(f"Invalid config: {path}")
 if not pathlib.Path("/opt/overlay_ws/install/setup.bash").is_file():
@@ -99,7 +101,7 @@ if backend not in {"ros", "none"}:
 if kind not in {"franka", "dh5", "none"}:
     raise ValueError(f"Unsupported gripper_type: {kind}")
 values = [
-    str(robot.get("robot_type", "fr3")),
+    str(robot.get("robot_type", "panda")),
     str(bool(robot.get("use_fake_hardware", True))).lower(),
     backend,
     str(camera.get("external_camera_serial", "")),

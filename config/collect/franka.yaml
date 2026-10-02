@@ -1,3 +1,5 @@
+extends: ../common/franka.yaml
+
 # Franka collection config. Later robots: config/collect/<robot>.yaml
 # Selectors:
 #   control.control_mode: ee | joint
@@ -15,18 +17,11 @@ dataset:
 
 camera:
   camera_backend: ros # ros | none
-  external_camera_serial: "825412070292"
-  wrist_camera_serial: "825412070487"
-  external_image_topic: "/external/color/image_raw"
-  wrist_image_topic: "/wrist/color/image_raw"
   camera_width: 640
   camera_height: 480
-  camera_fps: 30
   color_only: true
-  camera_startup_timeout_s: 10.0
   camera_timeout_ms: 1000
   image_hw: 224
-  crop_scale: 0.9
 
 vr:
   vr_pose_topic: "/xr/controller_right/pose"
@@ -49,23 +44,29 @@ control:
   motion_start_threshold: 0.0002
   max_ee_translation: 0.5
   max_ee_rotation: 1.2
-  ee_filter_coeff: 0.35
-  ee_nullspace_stiffness: 0.5
+
+# Online interfaces required by collection. Limits here are target guards;
+# control.max_ee_* above tunes the VR mapper (per axis).
+motion:
+  ee:
+    enabled: true
+    streaming:
+      publish_rate_hz: 100.0
+      limits:
+        max_translation_step_m: 0.02
+        max_rotation_step_rad: 0.02
+        max_translation_m: 0.9
+        max_rotation_rad: 2.1
+  joint:
+    streaming:
+      enabled: true
+  gripper:
+    enabled: true
 
 robot:
   use_fake_hardware: false
-  robot_type: fr3
-  start_joint_position:
-    - 0.00388
-    - -0.45916
-    - -0.15237
-    - -2.47266
-    - -0.06778
-    - 1.96442
-    - 0.70214
 
 gripper:
-  gripper_type: franka # franka | dh5 | none
   soft_gripper_use_fake: false
   soft_gripper_port: "/dev/ttyUSB0"
   gripper_left_image_topic: "/gripper_left/image_raw"

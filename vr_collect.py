@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import rclpy
 
 from control.collection_recording import (
     ActionSample,
@@ -38,6 +39,7 @@ from control.robot_config import (
 )
 from control.robot_state import EEPose
 from control.robotic_arm_controller_ros import RoboticArmControlerRos
+from control.motion_config import workflow_motion_config
 from control.soft_gripper_control_ros import DH5GripperRos
 from control.util.lerobot_recording import (
     open_recording_dataset,
@@ -48,6 +50,7 @@ from control.util.pose import (
     quat_wxyz_to_xyzw,
     quat_xyzw_to_wxyz,
 )
+from control.util.timing import control_loop
 from control.util.robot import (
     current_ee_pose,
     current_joint_position,
@@ -95,6 +98,17 @@ def main(*, lerobot_format: str | None = None) -> None:
     control_mode = parse_control_mode(getattr(config, "control_mode", "ee"))
     action_space = parse_action_space(getattr(config, "action_space", "ee"))
     gripper_type = parse_gripper_type(getattr(config, "gripper_type", "franka"))
+    motion_config = workflow_motion_config(
+        {
+            "robot": {
+                "robot_type": config.robot_type,
+                "use_fake_hardware": config.use_fake_hardware,
+            },
+            "gripper": {"gripper_type": gripper_type},
+            "motion": config.motion,
+        },
+        control_mode=control_mode,
+    )
     enable_soft_gripper = gripper_type == "dh5"
     use_force_dataset = bool(enable_logging and enable_soft_gripper)
 
@@ -108,13 +122,9 @@ def main(*, lerobot_format: str | None = None) -> None:
         f"control_mode: {control_mode}  action_space: {action_space}  gripper_type: {gripper_type}"
     )
     trans_limit_str = (
-        "off"
-        if config.max_ee_translation <= 0
-        else f"±{config.max_ee_translation:.3f}m"
+        "off" if config.max_ee_translation <= 0 else f"±{config.max_ee_translation:.3f}m"
     )
-    rot_limit_str = (
-        "off" if config.max_ee_rotation <= 0 else f"±{config.max_ee_rotation:.3f}rad"
-    )
+    rot_limit_str = "off" if config.max_ee_rotation <= 0 else f"±{config.max_ee_rotation:.3f}rad"
     print(f"Control frequency: {config.control_frequency} Hz")
     print(f"Sensitivity: {config.sensitivity}")
     print(
@@ -123,14 +133,10 @@ def main(*, lerobot_format: str | None = None) -> None:
         f"step_rot={config.max_ee_rotation_step:.3f}rad, "
         f"limit_xyz={trans_limit_str}, "
         f"limit_rot={rot_limit_str}, "
-        f"vr_rot={'on' if config.vr_enable_rotation else 'off'}, "
-        f"filter={config.ee_filter_coeff:.2f}, "
-        f"nullspace={config.ee_nullspace_stiffness:.2f}"
+        f"vr_rot={'on' if config.vr_enable_rotation else 'off'}"
     )
     action_label = (
-        "6D EE pose + gripper (7D)"
-        if action_space == "ee"
-        else "7D joint position + gripper (8D)"
+        "6D EE pose + gripper (7D)" if action_space == "ee" else "7D joint position + gripper (8D)"
     )
     print(f"Action logging: next measured {action_label}")
     print(
@@ -166,9 +172,7 @@ def main(*, lerobot_format: str | None = None) -> None:
     vr_reader = VRInputRos(
         pose_topic=getattr(config, "vr_pose_topic", "/xr/controller_right/pose"),
         left_joy_topic=getattr(config, "vr_left_joy_topic", "/xr/controller_left/joy"),
-        right_joy_topic=getattr(
-            config, "vr_right_joy_topic", "/xr/controller_right/joy"
-        ),
+        right_joy_topic=getattr(config, "vr_right_joy_topic", "/xr/controller_right/joy"),
         long_press_s=config.vr_long_press_s,
         assume_arm_enabled=bool(getattr(config, "vr_assume_arm_enabled", False)),
     )
@@ -193,16 +197,16 @@ def main(*, lerobot_format: str | None = None) -> None:
     print("Initializing Franka ROS 2 arm adapter...")
     arm = RoboticArmControlerRos(
         use_fake_hardware=bool(getattr(config, "use_fake_hardware", True)),
-        robot_type=str(getattr(config, "robot_type", "fr3")),
-        start_joint_position=config.start_joint_position,
+        robot_type=str(getattr(config, "robot_type", "panda")),
+        motion_config=motion_config,
     )
+
+    arm.connect()
 
     camera_backend = str(getattr(config, "camera_backend", "ros")).lower()
     print(f"Initializing ROS cameras (backend={camera_backend})...")
     camera_manager = DualRealsenseManagerRos(
-        external_topic=str(
-            getattr(config, "external_image_topic", "/external/color/image_raw")
-        ),
+        external_topic=str(getattr(config, "external_image_topic", "/external/color/image_raw")),
         wrist_topic=str(getattr(config, "wrist_image_topic", "/wrist/color/image_raw")),
         external_serial=config.external_camera_serial,
         wrist_serial=config.wrist_camera_serial,
@@ -226,12 +230,8 @@ def main(*, lerobot_format: str | None = None) -> None:
             enable_cameras=bool(getattr(config, "enable_soft_gripper_cameras", True)),
             crop_scale=float(config.crop_scale),
             image_hw=int(config.image_hw),
-            vr_axis_threshold=float(
-                getattr(config, "soft_gripper_axis_threshold", 0.55)
-            ),
-            vr_step_interval_s=float(
-                getattr(config, "soft_gripper_step_interval", 0.08)
-            ),
+            vr_axis_threshold=float(getattr(config, "soft_gripper_axis_threshold", 0.55)),
+            vr_step_interval_s=float(getattr(config, "soft_gripper_step_interval", 0.08)),
             use_fake=bool(getattr(config, "soft_gripper_use_fake", False)),
         )
         soft_gripper.set_force(int(getattr(config, "soft_gripper_force", 50)))
@@ -256,9 +256,7 @@ def main(*, lerobot_format: str | None = None) -> None:
         else:
             print(f"LeRobot dataset path: {dataset_root}")
         if use_force_dataset:
-            print(
-                "[Recording] Using DH5 force dataset features (gripper left/right images)"
-            )
+            print("[Recording] Using DH5 force dataset features (gripper left/right images)")
 
     frame_writer = AsyncDatasetFrames(dataset) if dataset is not None else None
 
@@ -269,9 +267,7 @@ def main(*, lerobot_format: str | None = None) -> None:
     else:
         print("[CameraROS] camera_backend=none, skipping wait_for_frames")
 
-    if soft_gripper is not None and bool(
-        getattr(config, "enable_soft_gripper_cameras", True)
-    ):
+    if soft_gripper is not None and bool(getattr(config, "enable_soft_gripper_cameras", True)):
         print("[DH5ROS] Waiting for gripper camera frames...")
         soft_gripper.wait_for_frames(timeout_s=float(config.camera_startup_timeout_s))
         print("[DH5ROS] Gripper cameras ready")
@@ -284,7 +280,7 @@ def main(*, lerobot_format: str | None = None) -> None:
     else:
         print("[Gripper] gripper_type=none, skip open")
     print("Moving to start position...")
-    move_robot_to_start_pose(arm, config.start_joint_position)
+    move_robot_to_start_pose(arm, config.start_joint_position, motion_config=motion_config)
     start_control_streaming(arm, control_mode, settle_s=0.5)
     collection_robot = CollectionRobot(
         arm=arm,
@@ -293,6 +289,7 @@ def main(*, lerobot_format: str | None = None) -> None:
         gripper_type=gripper_type,
         control_mode=control_mode,
         start_joint_position=config.start_joint_position,
+        motion_config=motion_config,
     )
 
     active_instruction = config.instruction
@@ -335,14 +332,13 @@ def main(*, lerobot_format: str | None = None) -> None:
     print("  X (left): save current episode labelled failed and return to start")
 
     try:
-        with arm.control_loop(frequency=config.control_frequency) as ctx:
+        with control_loop(frequency=config.control_frequency, keep_running=rclpy.ok) as ctx:
             while ctx.ok():
                 if (
                     enable_logging
                     and recorder.is_recording
                     and recorder.recording_started_at is not None
-                    and (time.time() - recorder.recording_started_at)
-                    > config.max_duration_s
+                    and (time.time() - recorder.recording_started_at) > config.max_duration_s
                 ):
                     if collection_robot.gripper_busy:
                         continue
@@ -370,9 +366,7 @@ def main(*, lerobot_format: str | None = None) -> None:
 
                 if y_edge:
                     if not enable_logging:
-                        print(
-                            "\n[Recording] Ignored Y press because logging is disabled."
-                        )
+                        print("\n[Recording] Ignored Y press because logging is disabled.")
                     elif collection_robot.gripper_busy:
                         print("\n[Recording] Ignored Y press because gripper is busy.")
                     else:
@@ -392,9 +386,7 @@ def main(*, lerobot_format: str | None = None) -> None:
 
                 if x_edge:
                     if not enable_logging:
-                        print(
-                            "\n[Recording] Ignored X press because logging is disabled."
-                        )
+                        print("\n[Recording] Ignored X press because logging is disabled.")
                     elif collection_robot.gripper_busy:
                         print("\n[Recording] Ignored X press because gripper is busy.")
                     else:
@@ -414,7 +406,7 @@ def main(*, lerobot_format: str | None = None) -> None:
 
                 qpos = current_joint_position(arm)
                 sample_ns = time.monotonic_ns()
-                robot_state = arm.state
+                robot_state = arm.get_state()
                 control_tick += 1
                 if control_tick % 10 == 0:
                     line = f"[Joint] current q = {format_joint_position(qpos)}"
@@ -422,9 +414,7 @@ def main(*, lerobot_format: str | None = None) -> None:
                 ee_pos, ee_quat_xyzw = current_ee_pose(arm)
                 ee_pose6 = EEPose.from_position_quat(ee_pos, ee_quat_xyzw).vector
                 if enable_logging and recorder.is_recording:
-                    recorder.complete_action(
-                        qpos, ee_pose6, collection_robot.gripper_state
-                    )
+                    recorder.complete_action(qpos, ee_pose6, collection_robot.gripper_state)
 
                 arm_enabled = bool(vr.arm_enabled)
                 if not arm_enabled and prev_arm_enabled:
@@ -435,9 +425,7 @@ def main(*, lerobot_format: str | None = None) -> None:
                 prev_arm_enabled = arm_enabled
 
                 if arm_enabled:
-                    hold_ee_quat_wxyz = quat_xyzw_to_wxyz(
-                        collection_robot.hold.quaternion_xyzw
-                    )
+                    hold_ee_quat_wxyz = quat_xyzw_to_wxyz(collection_robot.hold.quaternion_xyzw)
                     target_ee_pos, target_ee_quat_wxyz = vr_mapper.map(
                         vr,
                         collection_robot.hold.position,
@@ -465,11 +453,12 @@ def main(*, lerobot_format: str | None = None) -> None:
 
                 if not collection_robot.gripper_busy:
                     if has_ee_motion_cmd:
-                        arm.set_ee_control(target_ee_pos, target_ee_quat_xyzw, qpos)
+                        if control_mode == "joint":
+                            arm.send_joint_target(qpos)
+                        else:
+                            arm.send_ee_target(target_ee_pos, target_ee_quat_xyzw)
                         collection_robot.hold.position = target_ee_pos.copy()
-                        collection_robot.hold.quaternion_xyzw = (
-                            target_ee_quat_xyzw.copy()
-                        )
+                        collection_robot.hold.quaternion_xyzw = target_ee_quat_xyzw.copy()
                         collection_robot.hold.joints = qpos.copy()
                     else:
                         collection_robot.hold.apply(arm)
@@ -496,9 +485,7 @@ def main(*, lerobot_format: str | None = None) -> None:
                         gripper_cmd = 0.0
                     elif vr.gripper_open:
                         gripper_cmd = 1.0
-                    gripper_changed = collection_robot.request_franka_gripper(
-                        gripper_cmd
-                    )
+                    gripper_changed = collection_robot.request_franka_gripper(gripper_cmd)
                 else:
                     collection_robot.gripper_busy = False
 
@@ -540,9 +527,7 @@ def main(*, lerobot_format: str | None = None) -> None:
                     )
                 )
 
-                external_img, wrist_img, external_ts, wrist_ts = (
-                    camera_manager.get_frames()
-                )
+                external_img, wrist_img, external_ts, wrist_ts = camera_manager.get_frames()
                 if (
                     external_img is None
                     or wrist_img is None
@@ -567,9 +552,7 @@ def main(*, lerobot_format: str | None = None) -> None:
                     if soft_gripper is None:
                         continue
                     if bool(getattr(config, "enable_soft_gripper_cameras", True)):
-                        right_img, left_img, _, _ = (
-                            soft_gripper.dual_camera_manager.get_frames()
-                        )
+                        right_img, left_img, _, _ = soft_gripper.dual_camera_manager.get_frames()
                         gripper_left_img = left_img
                         gripper_right_img = right_img
                         if gripper_left_img is None or gripper_right_img is None:
@@ -604,12 +587,8 @@ def main(*, lerobot_format: str | None = None) -> None:
                         external_host_capture_monotonic_ns=int(
                             external_ts.host_capture_monotonic_ns
                         ),
-                        wrist_host_capture_monotonic_ns=int(
-                            wrist_ts.host_capture_monotonic_ns
-                        ),
-                        joint_position=np.asarray(
-                            robot_state["joint_positions"], dtype=np.float32
-                        ),
+                        wrist_host_capture_monotonic_ns=int(wrist_ts.host_capture_monotonic_ns),
+                        joint_position=np.asarray(robot_state["joint_positions"], dtype=np.float32),
                         gripper_position=float(collection_robot.gripper_state),
                         ee_position=ee_pos.copy(),
                         ee_orientation_xyzw=ee_quat_xyzw.copy(),
@@ -639,7 +618,7 @@ def main(*, lerobot_format: str | None = None) -> None:
     finally:
         with contextlib.suppress(Exception):
             collection_robot.hold.apply(arm)
-            arm.stop_ee_streaming()
+            arm.stop_stream()
 
         if enable_logging:
             try:
@@ -662,7 +641,7 @@ def main(*, lerobot_format: str | None = None) -> None:
             vr_reader.stop()
 
         with contextlib.suppress(Exception):
-            arm.cleanup()
+            arm.close()
 
         if enable_logging and dataset is not None:
             if frame_writer is not None:

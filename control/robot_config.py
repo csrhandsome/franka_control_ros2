@@ -7,6 +7,7 @@ use ``control_mode`` and ``gripper_type``.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -41,24 +42,54 @@ def config_path(
     return path
 
 
-def load_mapping(path: Path) -> dict:
-    with Path(path).open(encoding="utf-8") as file:
+def load_mapping(path: Path, *, _stack: tuple[Path, ...] = ()) -> dict:
+    """Load relative `extends` files, then recursively apply local overrides.
+
+    Mappings merge; lists and scalar values replace their inherited values.
+    Each call returns independent data. Cyclic inheritance is rejected.
+    """
+    path = Path(path).resolve()
+    if path in _stack:
+        chain = " -> ".join(str(item) for item in (*_stack, path))
+        raise ValueError(f"Cyclic config inheritance: {chain}")
+    with path.open(encoding="utf-8") as file:
         loaded = yaml.safe_load(file)
     if not isinstance(loaded, dict):
         raise TypeError(f"Config must be a mapping: {path}")
-    return loaded
+    parents = loaded.pop("extends", [])
+    if isinstance(parents, str):
+        parents = [parents]
+    if not isinstance(parents, list) or any(
+        not isinstance(parent, str) or not parent for parent in parents
+    ):
+        raise TypeError(f"extends must be a path or list of paths: {path}")
+    result = {}
+    for parent in parents:
+        _merge_mapping(result, load_mapping(path.parent / parent, _stack=(*_stack, path)))
+    _merge_mapping(result, loaded)
+    return result
+
+
+def _merge_mapping(base: dict, override: dict) -> None:
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_mapping(base[key], value)
+        else:
+            base[key] = deepcopy(value)
 
 
 def flatten_config(path: Path) -> SimpleNamespace:
     sections = load_mapping(path)
-    return SimpleNamespace(
-        **{
-            key: value
-            for section in sections.values()
-            if isinstance(section, dict)
-            for key, value in section.items()
-        }
-    )
+    values = {
+        key: value
+        for name, section in sections.items()
+        if name != "motion" and isinstance(section, dict)
+        for key, value in section.items()
+    }
+    # Motion is a nested controller schema; flattening it would overwrite robot
+    # and gripper workflow keys and discard its section names.
+    values["motion"] = deepcopy(sections.get("motion", {}))
+    return SimpleNamespace(**values)
 
 
 def section(config: dict, name: str) -> SimpleNamespace:

@@ -91,14 +91,13 @@ class FakeCameras:
 class StaleCameras(FakeCameras):
     def get_frames(self):
         front, wrist, _, _ = _frames()
-        stamp = types.SimpleNamespace(
-            host_capture_monotonic_ns=time.monotonic_ns() - 5 * 10**9
-        )
+        stamp = types.SimpleNamespace(host_capture_monotonic_ns=time.monotonic_ns() - 5 * 10**9)
         return front, wrist, stamp, stamp
 
 
 class FakeArm:
     def __init__(self, **_kwargs):
+        self.motion_config = _kwargs.get("motion_config")
         self.joints = np.zeros(7)
         self.position = np.array([0.0, 0.0, 0.5])
         self.gripper_position = 0.04
@@ -111,25 +110,25 @@ class FakeArm:
         self.gripper_calls: list[tuple[str, dict]] = []
         self.closed = False
 
-    @property
-    def state(self):
+    def get_state(self, **_kwargs):
         transform = np.eye(4)
         transform[:3, 3] = self.position
         return {
             "joint_positions": self.joints.copy(),
             "end_effector_pose": transform,
-            "gripper_position": self.gripper_position,
+            "gripper_width_m": self.gripper_position,
         }
 
-    def start_ee_streaming(self):
-        self.calls.append("start_ee_streaming")
+    def start_stream(self, space):
+        assert space == "ee"
+        self.calls.append("start_stream")
         self.ee_streaming_active = True
 
-    def move_to_start(self):
-        self.calls.append("move_to_start")
+    def move_joints(self, target, **_kwargs):
+        self.calls.append("move_joints")
 
-    def set_ee_control(self, position, quaternion, _qpos):
-        self.calls.append("set_ee_control")
+    def send_ee_target(self, position, quaternion):
+        self.calls.append("send_ee_target")
         self.position = np.asarray(position, dtype=np.float64).copy()
         self.commands.append(self.position.copy())
 
@@ -143,7 +142,16 @@ class FakeArm:
         self.gripper_calls.append(("close", kwargs))
         return True
 
-    def cleanup(self):
+    def connect(self):
+        pass
+
+    def wait_ready(self, **_kwargs):
+        return self.get_state()
+
+    def wait_until_stopped(self):
+        pass
+
+    def close(self):
         self.closed = True
 
 
@@ -156,9 +164,7 @@ def _recorder(created, key, factory):
     return build
 
 
-def _install_ros_stubs(
-    monkeypatch, *, policy=FakePolicy, cameras=FakeCameras, arm=FakeArm
-):
+def _install_ros_stubs(monkeypatch, *, policy=FakePolicy, cameras=FakeCameras, arm=FakeArm):
     """Replace the modules ``run`` imports; the real ones need ROS hardware."""
     created: dict[str, object] = {}
     stubs = [
@@ -203,14 +209,10 @@ def test_policy_metadata_and_chunk_timing():
     with pytest.raises(ValueError):
         validate_policy_metadata({**FakePolicy.server_metadata, "action_fps": 100.0})
     with pytest.raises(ValueError):
-        validate_policy_metadata(
-            {**FakePolicy.server_metadata, "action_space": "joint"}
-        )
+        validate_policy_metadata({**FakePolicy.server_metadata, "action_space": "joint"})
     with pytest.raises(ValueError):
         validate_policy_metadata({})
-    actions = np.tile(
-        np.arange(ACTION_HORIZON, dtype=np.float32)[:, None], (1, ACTION_DIM)
-    )
+    actions = np.tile(np.arange(ACTION_HORIZON, dtype=np.float32)[:, None], (1, ACTION_DIM))
     plan = parse_action_plan({"actions": actions}, observation_ns=10 * PERIOD_NS)
     assert action_at(plan, 10 * PERIOD_NS)[0] is None
     assert action_at(plan, 11 * PERIOD_NS)[1] == 0
@@ -223,9 +225,7 @@ def test_invalid_or_large_ee_targets_are_rejected():
 
     current = EEPose.from_vector(np.array([0.0, 0.0, 0.5, 0.0, 0.0, 0.0]))
     with pytest.raises(ValueError):
-        checked_ee_target(
-            np.array([0.1, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0]), current, 0.03, 0.15
-        )
+        checked_ee_target(np.array([0.1, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0]), current, 0.03, 0.15)
     with pytest.raises(ValueError):
         parse_action_plan({"actions": np.full((16, 7), np.nan)}, 0)
     with pytest.raises(ValueError):
@@ -262,9 +262,7 @@ def test_gripper_command_uses_collector_logical_open_state():
     assert busy.calls == []
 
 
-def test_plain_inference_commands_ee_without_writing_files(
-    monkeypatch, tmp_path, config
-):
+def test_plain_inference_commands_ee_without_writing_files(monkeypatch, tmp_path, config):
     created = _install_ros_stubs(monkeypatch)
     monkeypatch.chdir(tmp_path)
     run(config, host=None, port=None, prompt=None, max_steps=10, move_to_start=False)
@@ -272,8 +270,10 @@ def test_plain_inference_commands_ee_without_writing_files(
     arm = created["arm"]
     assert created["policy"].observations
     assert any(np.allclose(command, [0.01, 0.0, 0.5]) for command in arm.commands)
-    assert arm.calls.index("start_ee_streaming") < arm.calls.index("set_ee_control")
-    assert "move_to_start" not in arm.calls
+    assert arm.calls.index("start_stream") < arm.calls.index("send_ee_target")
+    assert "move_joints" not in arm.calls
+    assert arm.motion_config["ee"]["enabled"]
+    assert arm.motion_config["ee"]["streaming"]["publish_rate_hz"] == 30.0
     assert created["policy"].closed and arm.closed and created["cameras"].closed
     assert list(tmp_path.iterdir()) == []
 
@@ -340,9 +340,7 @@ def test_stale_camera_frames_abort_and_hold_position(monkeypatch, tmp_path, conf
     created = _install_ros_stubs(monkeypatch, cameras=StaleCameras)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(RuntimeError, match="stale"):
-        run(
-            config, host=None, port=None, prompt=None, max_steps=10, move_to_start=False
-        )
+        run(config, host=None, port=None, prompt=None, max_steps=10, move_to_start=False)
 
     arm = created["arm"]
     assert len(created["policy"].observations) == WARMUP_CHUNKS
@@ -361,9 +359,7 @@ def test_large_ee_jump_aborts_and_holds_position(monkeypatch, tmp_path, config):
     created = _install_ros_stubs(monkeypatch, policy=JumpingPolicy)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="differs from measured"):
-        run(
-            config, host=None, port=None, prompt=None, max_steps=10, move_to_start=False
-        )
+        run(config, host=None, port=None, prompt=None, max_steps=10, move_to_start=False)
 
     arm = created["arm"]
     assert all(np.allclose(command, [0.0, 0.0, 0.5]) for command in arm.commands)
@@ -371,9 +367,7 @@ def test_large_ee_jump_aborts_and_holds_position(monkeypatch, tmp_path, config):
     assert created["policy"].closed and arm.closed and created["cameras"].closed
 
 
-def test_policy_failure_stops_inference_and_releases_resources(
-    monkeypatch, tmp_path, config
-):
+def test_policy_failure_stops_inference_and_releases_resources(monkeypatch, tmp_path, config):
     class FailingPolicy(FakePolicy):
         def infer(self, observation):
             if observation["prompt"] == "":
@@ -383,9 +377,7 @@ def test_policy_failure_stops_inference_and_releases_resources(
     created = _install_ros_stubs(monkeypatch, policy=FailingPolicy)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(RuntimeError, match="Policy inference failed"):
-        run(
-            config, host=None, port=None, prompt=None, max_steps=10, move_to_start=False
-        )
+        run(config, host=None, port=None, prompt=None, max_steps=10, move_to_start=False)
 
     arm = created["arm"]
     assert arm.commands and np.allclose(arm.commands[-1], [0.0, 0.0, 0.5])
@@ -394,26 +386,19 @@ def test_policy_failure_stops_inference_and_releases_resources(
 
 def test_missing_robot_state_refuses_to_run(monkeypatch, tmp_path, config):
     class UnreadyArm(FakeArm):
-        def __init__(self, **kwargs):
-            super().__init__(**kwargs)
-            self.joint_state_ready = False
+        def wait_ready(self, **kwargs):
+            raise RuntimeError("Measured joints state is missing or stale")
 
     created = _install_ros_stubs(monkeypatch, arm=UnreadyArm)
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(RuntimeError, match="No measured joint or EE state"):
-        run(
-            config, host=None, port=None, prompt=None, max_steps=10, move_to_start=False
-        )
+    with pytest.raises(RuntimeError, match="Measured joints state is missing or stale"):
+        run(config, host=None, port=None, prompt=None, max_steps=10, move_to_start=False)
 
-    assert "start_ee_streaming" not in created["arm"].calls
-    assert (
-        created["policy"].closed and created["arm"].closed and created["cameras"].closed
-    )
+    assert "start_stream" not in created["arm"].calls
+    assert created["policy"].closed and created["arm"].closed and created["cameras"].closed
 
 
-def test_incompatible_policy_metadata_fails_before_moving_the_robot(
-    monkeypatch, tmp_path, config
-):
+def test_incompatible_policy_metadata_fails_before_moving_the_robot(monkeypatch, tmp_path, config):
     class HundredHzPolicy(FakePolicy):
         server_metadata: ClassVar[dict] = {
             **FakePolicy.server_metadata,
@@ -423,9 +408,7 @@ def test_incompatible_policy_metadata_fails_before_moving_the_robot(
     created = _install_ros_stubs(monkeypatch, policy=HundredHzPolicy)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="Incompatible policy metadata"):
-        run(
-            config, host=None, port=None, prompt=None, max_steps=10, move_to_start=False
-        )
+        run(config, host=None, port=None, prompt=None, max_steps=10, move_to_start=False)
 
     assert created["policy"].closed
     assert "cameras" not in created and "arm" not in created
@@ -434,33 +417,21 @@ def test_incompatible_policy_metadata_fails_before_moving_the_robot(
 @pytest.mark.parametrize(
     "mutate",
     [
-        pytest.param(
-            lambda c: c["camera"].update({"camera_backend": "usb"}), id="camera-backend"
-        ),
+        pytest.param(lambda c: c["camera"].update({"camera_backend": "usb"}), id="camera-backend"),
         pytest.param(lambda c: c["camera"].update({"image_hw": 128}), id="image-size"),
-        pytest.param(
-            lambda c: c["camera"].update({"camera_fps": 15.0}), id="camera-fps"
-        ),
-        pytest.param(
-            lambda c: c["gripper"].update({"gripper_type": "dh5"}), id="gripper-type"
-        ),
-        pytest.param(
-            lambda c: c["inference"].update({"action_fps": 60.0}), id="action-fps"
-        ),
+        pytest.param(lambda c: c["camera"].update({"camera_fps": 15.0}), id="camera-fps"),
+        pytest.param(lambda c: c["gripper"].update({"gripper_type": "dh5"}), id="gripper-type"),
+        pytest.param(lambda c: c["inference"].update({"action_fps": 60.0}), id="action-fps"),
         pytest.param(
             lambda c: c["inference"].update({"replan_every_steps": 16}),
             id="replan-horizon",
         ),
-        pytest.param(
-            lambda c: c["inference"].update({"replan_every_steps": 0}), id="replan-zero"
-        ),
+        pytest.param(lambda c: c["inference"].update({"replan_every_steps": 0}), id="replan-zero"),
         pytest.param(
             lambda c: c["inference"].update({"max_ee_translation_step_m": 0.0}),
             id="ee-step",
         ),
-        pytest.param(
-            lambda c: c["inference"].update({"max_camera_age_s": 0.0}), id="camera-age"
-        ),
+        pytest.param(lambda c: c["inference"].update({"max_camera_age_s": 0.0}), id="camera-age"),
         pytest.param(lambda c: c["inference"].update({"prompt": "  "}), id="prompt"),
     ],
 )
@@ -470,6 +441,15 @@ def test_config_validation_rejects_bad_settings(monkeypatch, config, mutate):
     with pytest.raises(ValueError):
         run(config, host=None, port=None, prompt=None, max_steps=1, move_to_start=False)
     assert created == {}
+
+
+def test_disabled_workflow_stream_aborts_before_camera_and_arm_setup(monkeypatch, config):
+    created = _install_ros_stubs(monkeypatch)
+    config["motion"]["ee"]["enabled"] = False
+    with pytest.raises(ValueError, match="requires enabled ee streaming"):
+        run(config, host=None, port=None, prompt=None, max_steps=1, move_to_start=False)
+    assert "cameras" not in created and "arm" not in created
+    assert created["policy"].closed
 
 
 class StubPolicyServer:
@@ -497,9 +477,7 @@ class StubPolicyServer:
         self._thread: threading.Thread | None = None
 
     def __enter__(self):
-        self._thread = threading.Thread(
-            target=self._serve, name="stub-policy", daemon=True
-        )
+        self._thread = threading.Thread(target=self._serve, name="stub-policy", daemon=True)
         self._thread.start()
         assert self._ready.wait(10.0), "stub policy server did not start"
         if self.error is not None:
@@ -536,9 +514,7 @@ class StubPolicyServer:
             while True:
                 self.observations.append(msgpack_numpy.unpackb(await websocket.recv()))
                 await websocket.send(
-                    packer.pack(
-                        {"actions": self.actions, "server_timing": {"infer_ms": 1.0}}
-                    )
+                    packer.pack({"actions": self.actions, "server_timing": {"infer_ms": 1.0}})
                 )
         except websockets.exceptions.ConnectionClosed:
             return
@@ -571,9 +547,7 @@ def test_real_policy_client_round_trips_observations(monkeypatch, tmp_path, conf
     assert observation["observation/gripper_position"].shape == (1,)
     assert observation["observation/gripper_position"][0] == 1.0
     # The server's 16x7 reply reached the arm as absolute Cartesian targets.
-    assert any(
-        np.allclose(command, [0.01, 0.0, 0.5]) for command in created["arm"].commands
-    )
+    assert any(np.allclose(command, [0.01, 0.0, 0.5]) for command in created["arm"].commands)
     assert len(created["arm"].gripper_calls) == 1
     name, kwargs = created["arm"].gripper_calls[0]
     assert name == "open" and kwargs["wait"] is False

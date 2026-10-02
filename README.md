@@ -3,11 +3,11 @@
 The normal collection command is `./collect.sh`. It manages the ROS bringup,
 VR publisher, and `vr_collect.py` containers together.
 
-| Entry point | Purpose | Configuration |
-| --- | --- | --- |
-| `./collect.sh` / `vr_collect.py` | VR teleoperation and LeRobot recording | `config/collect/franka.yaml` |
-| `inference.py` | 30 Hz EE policy inference or Force RLT, without recording | `config/inference/franka.yaml` |
-| `inference_hitl.py` | Policy rollouts with VR takeover and branch recording | `config/hitl/franka.yaml` |
+| Entry point                      | Purpose                                                   | Configuration                  |
+| -------------------------------- | --------------------------------------------------------- | ------------------------------ |
+| `./collect.sh` / `vr_collect.py` | VR teleoperation and LeRobot recording                    | `config/collect/franka.yaml`   |
+| `inference.py`                   | 30 Hz EE policy inference or Force RLT, without recording | `config/inference/franka.yaml` |
+| `inference_hitl.py`              | Policy rollouts with VR takeover and branch recording     | `config/hitl/franka.yaml`      |
 
 Robot control, collection, camera access, and ROS inference run in the
 `franka_humble` Docker image, with Python 3.10 at `/opt/uv/venv`. The repository
@@ -130,13 +130,20 @@ Jazzy 镜像当前只完成合成记录验证，尚无机器人 bringup。
 `DH5_SERIAL_DEVICE`。`collect.sh` 会自动使用 `compose_dh5.sh` 启动带
 串口和 USB/video 映射的 bringup；右手摇杆 Y 轴也可逐步调整 DH5 开合。
 
+当前机器人为 **Panda**，公共配置见 `config/common/franka.yaml`，继承与文件用途见
+[配置说明](config/README.md)。采集的 `motion` 明确启用 EE、joint 连续控制和夹爪，
+连续目标使用独立步长/范围保护；小范围轨迹测试参数不再限制采集。Panda
+Docker 使用 LCAS 驱动与 libfranka 0.9.2，collection overlay 的 joint/EE 目标控制器
+通过该驱动的 ROS 硬件接口执行。请使用下面的项目 bringup，而非上游默认 launch；
+上游默认 launch 不加载项目目标控制器。实机验证命令见文末测试说明。
+
 需要分别调试三个进程时，也可以在三个终端运行下面的命令：
 
 ```bash
 # 终端 1：机器人控制器与两路 RealSense；此容器需要 USB 设备。
 bash ros2_ws/docker/franka_humble/scripts/compose_devices.sh run --rm franka_humble \
   bash -c 'ros2 launch data_collect_franka franka_data_collect.launch.py \
-    robot_type:=fr3 robot_ip:="$FRANKA_ROBOT_IP" use_fake_hardware:=false \
+    robot_type:=panda robot_ip:="$FRANKA_ROBOT_IP" use_fake_hardware:=false \
     load_gripper:=true start_cameras:=true \
     external_serial:=825412070292 wrist_serial:=825412070487'
 
@@ -253,8 +260,10 @@ uv run scripts/serve_policy.py policy:checkpoint \
 
 Set the server host, camera topics, and robot settings in
 `config/inference/franka.yaml`. Run the ROS bringup and inference in two
-Humble containers from this repository root (the policy server above runs in
-the `openpi-force` GPU environment). For a real FR3, set
+Humble containers from this repository root. Workflow `motion` settings enable EE/joint
+streaming and gripper support with separate online target limits. The Panda runtime uses the project joint/EE controllers through the LCAS driver
+(see [configuration notes](config/README.md)); build the matching overlay first. The policy server runs in
+the `openpi-force` GPU environment. For the current Panda, set
 `robot.use_fake_hardware: false` in the inference YAML and use the matching
 bringup argument:
 
@@ -262,7 +271,7 @@ bringup argument:
 # Terminal 1: robot, gripper, and both cameras (USB devices required here).
 bash ros2_ws/docker/franka_humble/scripts/compose_devices.sh run --rm franka_humble \
   bash -c 'exec ros2 launch data_collect_franka franka_data_collect.launch.py \
-    robot_type:=fr3 robot_ip:="$FRANKA_ROBOT_IP" use_fake_hardware:=false \
+    robot_type:=panda robot_ip:="$FRANKA_ROBOT_IP" use_fake_hardware:=false \
     load_gripper:=true start_cameras:=true joint_state_rate:=30 \
     external_serial:=825412070292 wrist_serial:=825412070487'
 
@@ -371,31 +380,32 @@ splits a group at every control source change, preserving each fork point.
 ## Manual control
 
 The collection and inference scripts are not needed to move the arm by hand.
-`control/franka_ros2_control.py` is a small CLI over
-`control.robotic_arm_controller_ros.RoboticArmControlerRos`. Run it from the
+`control/robotic_arm_controller_ros.py` exposes only the public
+`RoboticArmControlerRos` API. Private ROS resources, callbacks, motion execution,
+and gripper workers live in `control/_ros/`. State, status, capability and result
+contracts live in `control/robotic_arm_ros_types.py`; pose utilities are reused
+from `control/util/pose.py`. The separate CLI is `control/robotic_arm_ros_cli.py`.
+Run it from the
 repository root inside the Humble container:
 
 ```bash
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
-  franka_humble python -m control.franka_ros2_control status
+  franka_humble python -m control.robotic_arm_ros_cli status
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
-  franka_humble python -m control.franka_ros2_control hold
+  franka_humble python -m control.robotic_arm_ros_cli gripper-open
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
-  franka_humble python -m control.franka_ros2_control gripper-open
+  franka_humble python -m control.robotic_arm_ros_cli gripper-close
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
-  franka_humble python -m control.franka_ros2_control gripper-close
-bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
-  franka_humble python -m control.franka_ros2_control move-start
+  franka_humble python -m control.robotic_arm_ros_cli move-start
 ```
 
-Start the matching ROS bringup first. Missing real-robot topics are errors
-unless `--use-fake-hardware` is passed, so
-the CLI never silently commands a robot. The same module exposes an importable
-facade: `from control.franka_ros2_control import FrankaROS2Control`.
+Start the matching ROS bringup first. Missing measured joints are errors on
+both real and fake hardware. `--use-fake-hardware` identifies the fake runtime;
+it does not bypass readiness or activate a motion controller. Import the class directly: `from control.robotic_arm_controller_ros import RoboticArmControlerRos`.
 
 ## Tests
 
-The tests use fake robot/camera inputs and fake or local test policy servers.
+The unit and synthetic tests use fake robot/camera inputs and fake or local test policy servers.
 Dataset tests write temporary synthetic datasets; they do not move real
 hardware. Run ROS runtime checks in the Humble container after resolving the
 startup blockers above:
@@ -405,7 +415,61 @@ bash ros2_ws/docker/franka_humble/scripts/run_tests.sh
 bash ros2_ws/docker/franka_humble/scripts/run_tests.sh tests/test_inference.py
 ```
 
-That script syncs `/opt/uv/venv` from
+For **live tests of `RoboticArmControlerRos`**, start the existing Panda ROS
+bringup in one terminal (skip this if it is already running):
+
+```bash
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble bash -c 'exec ros2 launch data_collect_franka franka_data_collect.launch.py robot_type:=panda robot_ip:="$FRANKA_ROBOT_IP" use_fake_hardware:=false load_gripper:=true start_cameras:=false'
+```
+
+Then run the test in another terminal from the repository root:
+
+```bash
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python tests/docker_arm_connection_test.py
+```
+
+This is an ordinary `unittest` suite running in one process. It tests joint/EE
+streaming, direct moves, trajectories and cancellation through the class's
+public interfaces. Joint 1 moves by 0.006 rad and EE moves by 0.004 m along
+base-frame +Z; successful cases check measured motion and return to the start.
+The extended EE streaming case keeps the measured starting orientation and
+follows two continuous ellipses in the base-frame X/Z plane over 40 seconds:
+X ranges from -0.02 to +0.02 m relative to the start, and Z from 0 to +0.05 m.
+It sends targets at 100 Hz, uses quintic timing for smooth starts and stops,
+then holds the starting pose for two seconds before stopping the stream.
+It checks both loops' measured range, tracking error, orientation and return
+within 1 mm. These tests request 0.8 mm EE completion accuracy while retaining
+the 1 mm arrival assertions.
+
+Run only the EE cases (including the extended stream), stopping on the first
+failure:
+
+```bash
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python tests/docker_arm_connection_test.py -k ee -f
+```
+
+For only the larger continuous motion:
+
+```bash
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps \
+  franka_humble python tests/docker_arm_connection_test.py \
+  RoboticArmControlerRosTest.test_09_ee_continuous_motion
+```
+
+The test container must use the same `ROS_DOMAIN_ID` as the bringup; add
+`-e ROS_DOMAIN_ID=<bringup-domain>` before `franka_humble` if the bringup
+overrides the `.env` value. `FRANKA_TEST_EE_TRACE_PATH` optionally records the
+extended stream's target poses and measured feedback as CSV; use a mounted
+output path to keep it after the test container exits.
+
+Each test closes its client and checks ROS entities, owned context and threads.
+Movement and cleanup errors appear as ordinary test failures with their
+original tracebacks. Stop the temporary bringup with Ctrl-C after testing.
+
+`run_tests.sh` syncs `/opt/uv/venv` from
 `ros2_ws/docker/franka_humble/python`, then runs pytest in the container.
 `tests/conftest.py` skips `test_multirate.py` and `test_episode_edit.py` when
 `lerobot` is missing, so the container run covers every test it can import
@@ -418,12 +482,14 @@ checks do not verify FCI, live camera/VR input, or real-arm execution.
 
 ## Repository layout
 
-| Directory | Contents |
-| --- | --- |
-| `control/` | ROS arm, gripper, camera and VR adapters; collection recorder; HITL loop |
-| `config/{collect,inference,hitl}/` | Per-workflow robot YAML configuration |
-| `scripts/data_analysis/` | Offline dataset quality checks, episode editing/merging, and audio tools |
-| `scripts/modelscope/` | ModelScope dataset/model transfer scripts (ignored; contains API credentials) |
-| `ros2_ws/src/data_collect_franka/` | ROS bringup, controllers, DH5 and camera nodes |
-| `ros2_ws/docker/` | Humble deployment runtime and isolated Jazzy experiment |
-| `tests/` | Unit/contract tests and synthetic Docker recording checks |
+| Directory                          | Contents                                                                      |
+| ---------------------------------- | ----------------------------------------------------------------------------- |
+| `control/`                         | ROS arm, gripper, camera and VR adapters; collection recorder; HITL loop      |
+| `config/{collect,inference,hitl}/` | Workflow overrides inheriting shared Panda configuration                      |
+| `config/common/`                   | Shared robot/camera workflow values                                           |
+| `config/planer/panda.yaml`         | Panda interfaces and motion defaults; workflows apply `motion` overrides      |
+| `scripts/data_analysis/`           | Offline dataset quality checks, episode editing/merging, and audio tools      |
+| `scripts/modelscope/`              | ModelScope dataset/model transfer scripts (ignored; contains API credentials) |
+| `ros2_ws/src/data_collect_franka/` | ROS bringup, controllers, DH5 and camera nodes                                |
+| `ros2_ws/docker/`                  | Humble deployment runtime and isolated Jazzy experiment                       |
+| `tests/`                           | Unit/contract tests and synthetic Docker recording checks                     |

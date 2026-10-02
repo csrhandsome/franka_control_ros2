@@ -1,0 +1,11 @@
+extends: franka.yaml
+
+# Synthetic/fake workflow; this does not select a different controller API.
+robot:
+  use_fake_hardware: true
+camera:
+  camera_backend: none
+dataset:
+  enable_logging: false
+gripper:
+  gripper_type: none

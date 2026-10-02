@@ -7,36 +7,51 @@ import math
 import numpy as np
 
 
-def _vector(values: np.ndarray, size: int, name: str) -> np.ndarray:
+def as_vector(values: np.ndarray, size: int, name: str) -> np.ndarray:
     vector = np.asarray(values, dtype=np.float64)
     if vector.shape != (size,) or not np.isfinite(vector).all():
         raise ValueError(f"{name} must be a finite {size}D vector")
-    return vector
+    return vector.copy()
 
 
-def _unit_quat_xyzw(quat: np.ndarray) -> np.ndarray:
-    quat = _vector(quat, 4, "xyzw quaternion")
+def normalize_quat_xyzw(quat: np.ndarray) -> np.ndarray:
+    quat = as_vector(quat, 4, "xyzw quaternion")
     norm = float(np.linalg.norm(quat))
     if norm < 1e-12:
         raise ValueError("Quaternion must be nonzero")
     return quat / norm
 
 
+def slerp_quat_xyzw(start: np.ndarray, end: np.ndarray, fraction: float) -> np.ndarray:
+    """Interpolate normalized xyzw quaternions along the shortest arc."""
+    start, end = normalize_quat_xyzw(start), normalize_quat_xyzw(end)
+    dot = float(np.dot(start, end))
+    if dot < 0:
+        end, dot = -end, -dot
+    dot = float(np.clip(dot, -1.0, 1.0))
+    if dot > 0.9995:
+        return normalize_quat_xyzw(start + fraction * (end - start))
+    angle = math.acos(dot)
+    return (math.sin((1 - fraction) * angle) * start + math.sin(fraction * angle) * end) / math.sin(
+        angle
+    )
+
+
 def quat_xyzw_to_wxyz(quat_xyzw: np.ndarray) -> np.ndarray:
-    return _vector(quat_xyzw, 4, "xyzw quaternion")[[3, 0, 1, 2]].copy()
+    return as_vector(quat_xyzw, 4, "xyzw quaternion")[[3, 0, 1, 2]]
 
 
 def quat_wxyz_to_xyzw(quat_wxyz: np.ndarray) -> np.ndarray:
-    return _vector(quat_wxyz, 4, "wxyz quaternion")[[1, 2, 3, 0]].copy()
+    return as_vector(quat_wxyz, 4, "wxyz quaternion")[[1, 2, 3, 0]]
 
 
 def quat_angle_xyzw(a: np.ndarray, b: np.ndarray) -> float:
-    dot = abs(float(np.dot(_unit_quat_xyzw(a), _unit_quat_xyzw(b))))
+    dot = abs(float(np.dot(normalize_quat_xyzw(a), normalize_quat_xyzw(b))))
     return float(2.0 * math.acos(np.clip(dot, -1.0, 1.0)))
 
 
 def quat_xyzw_to_matrix(quat_xyzw: np.ndarray) -> np.ndarray:
-    x, y, z, w = _unit_quat_xyzw(quat_xyzw)
+    x, y, z, w = normalize_quat_xyzw(quat_xyzw)
     return np.array(
         [
             [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
@@ -70,7 +85,7 @@ def matrix_to_quat_xyzw(rotation: np.ndarray) -> np.ndarray:
         values[j] = (rotation[j, i] + rotation[i, j]) * s
         values[k] = (rotation[k, i] + rotation[i, k]) * s
         x, y, z = values
-    return _unit_quat_xyzw(np.array([x, y, z, w], dtype=np.float64))
+    return normalize_quat_xyzw(np.array([x, y, z, w], dtype=np.float64))
 
 
 def matrix_to_rpy(rotation: np.ndarray) -> np.ndarray:
@@ -88,7 +103,7 @@ def matrix_to_rpy(rotation: np.ndarray) -> np.ndarray:
 
 
 def rpy_to_quat_xyzw(rpy: np.ndarray) -> np.ndarray:
-    roll, pitch, yaw = _vector(rpy, 3, "RPY angles") / 2.0
+    roll, pitch, yaw = as_vector(rpy, 3, "RPY angles") / 2.0
     cr, sr = math.cos(roll), math.sin(roll)
     cp, sp = math.cos(pitch), math.sin(pitch)
     cy, sy = math.cos(yaw), math.sin(yaw)
@@ -106,7 +121,7 @@ def rpy_to_quat_xyzw(rpy: np.ndarray) -> np.ndarray:
 def position_quat_to_matrix(position: np.ndarray, quat_xyzw: np.ndarray) -> np.ndarray:
     matrix = np.eye(4, dtype=np.float64)
     matrix[:3, :3] = quat_xyzw_to_matrix(quat_xyzw)
-    matrix[:3, 3] = _vector(position, 3, "EE position")
+    matrix[:3, 3] = as_vector(position, 3, "EE position")
     return matrix
 
 
@@ -122,5 +137,5 @@ def position_quat_to_pose6(position: np.ndarray, quat_xyzw: np.ndarray) -> np.nd
 
 
 def pose6_to_quat_xyzw(pose: np.ndarray) -> np.ndarray:
-    pose = _vector(pose, 6, "EE pose")
+    pose = as_vector(pose, 6, "EE pose")
     return rpy_to_quat_xyzw(pose[3:])

@@ -32,11 +32,10 @@ class JointPositionTargetController : public controller_interface::ControllerInt
   std::array<double, kNumJoints> command_q_{};
   std::array<double, kNumJoints> target_q_{};
   bool has_target_{false};
-  bool initialized_{false};
 
   double max_joint_velocity_{0.8};
   std::string arm_prefix_;
-  std::string robot_type_{"fr3"};
+  std::string robot_type_{"panda"};
 };
 
 }  // namespace data_collect_franka

@@ -31,6 +31,14 @@ RUN git clone https://github.com/frankarobotics/libfranka.git /opt/panda_libfran
        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
        -DFranka_DIR=/opt/panda_libfranka/lib/cmake/Franka
 ENV LD_LIBRARY_PATH=/opt/panda_libfranka/lib
+COPY patches/panda-control-startup.patch /opt/panda-control-startup.patch
+RUN git -C /opt/panda_ws/src/franka_arm_ros2 apply --check /opt/panda-control-startup.patch \
+    && git -C /opt/panda_ws/src/franka_arm_ros2 apply /opt/panda-control-startup.patch \
+    && source /opt/ros/humble/setup.bash \
+    && cd /opt/panda_ws \
+    && colcon build --packages-select franka_hardware franka_robot_state_broadcaster \
+       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+       -DFranka_DIR=/opt/panda_libfranka/lib/cmake/Franka
 COPY entrypoint-safe.sh /usr/local/bin/franka-entrypoint
 
 USER ${USERNAME}

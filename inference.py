@@ -19,6 +19,8 @@ from typing import Any
 import numpy as np
 
 from control.robot_config import config_path, load_mapping, section
+from control.motion_config import workflow_motion_config
+from control.util.robot import move_robot_to_start_pose
 from control.robot_state import EEPose
 from control.util.pose import quat_angle_xyzw
 
@@ -153,17 +155,13 @@ class PolicyWorker:
     def __init__(self, policy: Any, *, parse_response=parse_action_plan) -> None:
         self._policy = policy
         self._parse_response = parse_response
-        self._requests: queue.Queue[tuple[dict[str, Any], int] | None] = queue.Queue(
-            maxsize=1
-        )
+        self._requests: queue.Queue[tuple[dict[str, Any], int] | None] = queue.Queue(maxsize=1)
         self._lock = threading.Lock()
         self._pending = False
         self._result: ActionPlan | None = None
         self._error: BaseException | None = None
         self._stop = threading.Event()
-        self._thread = threading.Thread(
-            target=self._run, name="policy-inference", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="policy-inference", daemon=True)
         self._thread.start()
 
     def submit(self, observation: dict[str, Any], observation_ns: int) -> bool:
@@ -191,9 +189,7 @@ class PolicyWorker:
                 return
             observation, observation_ns = request
             try:
-                plan = self._parse_response(
-                    self._policy.infer(observation), observation_ns
-                )
+                plan = self._parse_response(self._policy.infer(observation), observation_ns)
             except BaseException as exc:
                 with self._lock:
                     self._error = exc
@@ -209,13 +205,9 @@ class PolicyWorker:
         self._thread.join(timeout=2.0)
 
 
-def _command_gripper(
-    arm: Any, target_open: float, last_open: float | None
-) -> float | None:
+def _command_gripper(arm: Any, target_open: float, last_open: float | None) -> float | None:
     if not np.isfinite(target_open) or not 0.0 <= target_open <= 1.0:
-        raise ValueError(
-            f"Policy logical gripper target outside 0..1: {target_open:.3f}"
-        )
+        raise ValueError(f"Policy logical gripper target outside 0..1: {target_open:.3f}")
     if arm.gripper_busy:
         return last_open
     command = float(target_open >= 0.5)
@@ -291,6 +283,7 @@ def run(
             )
             return
         validate_policy_metadata(policy.server_metadata)
+        motion_config = workflow_motion_config(config, control_mode="ee")
         warmup_policy(policy)
         cameras = DualRealsenseManagerRos(
             external_topic=str(camera_cfg.external_image_topic),
@@ -306,26 +299,22 @@ def run(
         arm = RoboticArmControlerRos(
             use_fake_hardware=bool(robot_cfg.use_fake_hardware),
             robot_type=str(robot_cfg.robot_type),
-            start_joint_position=list(robot_cfg.start_joint_position),
+            motion_config=motion_config,
         )
-        if not arm.joint_state_ready or not arm.ee_pose_ready:
-            raise RuntimeError(
-                "No measured joint or EE state; refusing to run inference"
-            )
+        arm.connect()
+        arm.wait_ready(required=("joints", "ee", "gripper"))
         if move_to_start or bool(inference_cfg.move_to_start):
-            arm.move_to_start()
-        arm.start_ee_streaming()
-        if not arm.ee_streaming_active:
-            raise RuntimeError("Cartesian controller is unavailable for EE inference")
+            move_robot_to_start_pose(
+                arm, list(robot_cfg.start_joint_position), motion_config=motion_config
+            )
+        arm.start_stream("ee")
         worker = PolicyWorker(policy)
         fresh_pair = FreshCameraPair()
         plan: ActionPlan | None = None
         last_gripper_open: float | None = None
         tick_ns = time.monotonic_ns()
         steps = 0
-        logger.info(
-            "Inference started: prompt=%r, 30 Hz, max_steps=%s", task, step_limit
-        )
+        logger.info("Inference started: prompt=%r, 30 Hz, max_steps=%s", task, step_limit)
 
         while step_limit <= 0 or steps < step_limit:
             now_ns = time.monotonic_ns()
@@ -342,38 +331,27 @@ def run(
             if front_ns > now_ns or wrist_ns > now_ns:
                 raise RuntimeError("Camera frame timestamp is in the future")
 
-            measured = arm.state
-            current_joints = np.asarray(measured["joint_positions"], dtype=np.float64)
+            measured = arm.get_state(required=("joints", "ee", "gripper"))
             current_ee = EEPose.from_matrix(measured["end_effector_pose"])
             new_plan = worker.take_result()
             if new_plan is not None:
                 plan = new_plan
             action, index = action_at(plan, now_ns) if plan is not None else (None, 0)
             if action is None:
-                arm.set_ee_control(
-                    current_ee.xyz_m, current_ee.quaternion_xyzw(), current_joints
-                )
+                arm.send_ee_target(current_ee.xyz_m, current_ee.quaternion_xyzw())
             else:
                 desired_ee = checked_ee_target(
                     action, current_ee, translation_limit, rotation_limit
                 )
-                arm.set_ee_control(
-                    desired_ee.xyz_m, desired_ee.quaternion_xyzw(), current_joints
-                )
-                last_gripper_open = _command_gripper(
-                    arm, float(action[6]), last_gripper_open
-                )
+                arm.send_ee_target(desired_ee.xyz_m, desired_ee.quaternion_xyzw())
+                last_gripper_open = _command_gripper(arm, float(action[6]), last_gripper_open)
 
-            if (plan is None or index >= replan_steps) and fresh_pair.accept(
-                front_ns, wrist_ns
-            ):
+            if (plan is None or index >= replan_steps) and fresh_pair.accept(front_ns, wrist_ns):
                 observation = build_observation(
                     front,
                     wrist,
                     current_ee.vector,
-                    float(
-                        float(measured["gripper_position"]) >= GRIPPER_OPEN_THRESHOLD_M
-                    ),
+                    float(float(measured["gripper_width_m"]) >= GRIPPER_OPEN_THRESHOLD_M),
                     task,
                     steps,
                 )
@@ -385,11 +363,9 @@ def run(
     finally:
         if arm is not None:
             try:
-                current_state = arm.state
+                current_state = arm.get_state(required=("joints", "ee", "gripper"))
                 hold = EEPose.from_matrix(current_state["end_effector_pose"])
-                arm.set_ee_control(
-                    hold.xyz_m, hold.quaternion_xyzw(), current_state["joint_positions"]
-                )
+                arm.send_ee_target(hold.xyz_m, hold.quaternion_xyzw())
             except Exception:
                 logger.exception("Failed to hold current joint position")
         try:
@@ -400,7 +376,7 @@ def run(
         finally:
             try:
                 if arm is not None:
-                    arm.cleanup()
+                    arm.close()
             finally:
                 if cameras is not None:
                     cameras.close()
@@ -457,11 +433,7 @@ def build_force_observation(
         raise ValueError("Force RLT cameras must provide 224x224x3 uint8 RGB")
     if joints.shape != (7,) or not np.isfinite(joints).all():
         raise ValueError("Measured joints must be finite with shape (7,)")
-    if (
-        tcp.shape != (4, 4)
-        or not np.isfinite(tcp).all()
-        or not np.allclose(tcp[3], [0, 0, 0, 1])
-    ):
+    if tcp.shape != (4, 4) or not np.isfinite(tcp).all() or not np.allclose(tcp[3], [0, 0, 0, 1]):
         raise ValueError("Measured O_T_TCP must be a finite homogeneous 4x4 matrix")
     if not np.isfinite(gripper_open) or not 0 <= gripper_open <= 1:
         raise ValueError("Logical gripper observation must be in 0..1")
@@ -575,8 +547,7 @@ def run_force_rlt(
                 raise ValueError(f"force_rlt.{name} must contain seven finite values")
             limits[name] = value
         if np.any(limits["joint_lower"] >= limits["joint_upper"]) or any(
-            np.any(limits[name] <= 0)
-            for name in ("max_joint_step_rad", "reference_radius_rad")
+            np.any(limits[name] <= 0) for name in ("max_joint_step_rad", "reference_radius_rad")
         ):
             raise ValueError("Invalid force RLT joint limits")
     if str(camera_cfg.camera_backend) != "ros" or int(camera_cfg.image_hw) != IMAGE_HW:
@@ -594,6 +565,7 @@ def run_force_rlt(
     arm = None
     worker = None
     try:
+        motion_config = workflow_motion_config(config, control_mode="joint")
         cameras = DualRealsenseManagerRos(
             external_topic=str(camera_cfg.external_image_topic),
             wrist_topic=str(camera_cfg.wrist_image_topic),
@@ -608,13 +580,15 @@ def run_force_rlt(
         arm = RoboticArmControlerRos(
             use_fake_hardware=bool(robot_cfg.use_fake_hardware),
             robot_type=str(robot_cfg.robot_type),
-            start_joint_position=list(robot_cfg.start_joint_position),
+            motion_config=motion_config,
         )
-        if not arm.joint_state_ready or not arm.ee_pose_ready:
-            raise RuntimeError("Measured joint/TCP state is unavailable")
+        arm.connect()
+        arm.wait_ready(required=("joints", "ee", "gripper"))
         if move_to_start or bool(inference_cfg.move_to_start):
-            arm.move_to_start()
-        arm.start_joint_streaming()
+            move_robot_to_start_pose(
+                arm, list(robot_cfg.start_joint_position), motion_config=motion_config
+            )
+        arm.start_stream("joint")
         worker = PolicyWorker(
             policy,
             parse_response=lambda response, stamp: parse_force_action_plan(
@@ -633,17 +607,14 @@ def run_force_rlt(
             front, wrist, front_ts, wrist_ts = cameras.get_frames()
             now_ns = time.monotonic_ns()
             if front is None or wrist is None or front_ts is None or wrist_ts is None:
-                raise RuntimeError(
-                    "Camera frames unavailable during force RLT inference"
-                )
+                raise RuntimeError("Camera frames unavailable during force RLT inference")
             front_ns = int(front_ts.host_capture_monotonic_ns)
             wrist_ns = int(wrist_ts.host_capture_monotonic_ns)
             if any(
-                stamp > now_ns or now_ns - stamp > camera_age_ns
-                for stamp in (front_ns, wrist_ns)
+                stamp > now_ns or now_ns - stamp > camera_age_ns for stamp in (front_ns, wrist_ns)
             ):
                 raise RuntimeError("Camera frame stale during force RLT inference")
-            measured = arm.state
+            measured = arm.get_state(required=("joints", "ee", "gripper"))
             q = np.asarray(measured["joint_positions"], dtype=np.float64)
             tcp = np.asarray(measured["end_effector_pose"], dtype=np.float32)
             if q.shape != (7,) or not np.isfinite(q).all():
@@ -653,9 +624,7 @@ def run_force_rlt(
             new_plan = worker.take_result()
             if new_plan is not None:
                 plan = new_plan
-            index = (
-                -1 if plan is None else (now_ns - plan.observation_ns) // PERIOD_NS - 1
-            )
+            index = -1 if plan is None else (now_ns - plan.observation_ns) // PERIOD_NS - 1
             target = q
             if (
                 plan is not None
@@ -672,18 +641,14 @@ def run_force_rlt(
                     max_step=limits["max_joint_step_rad"],
                     reference_radius=limits["reference_radius_rad"],
                 )
-            arm.set_joint_control(target)
-            if (plan is None or index >= replan_steps) and fresh_pair.accept(
-                front_ns, wrist_ns
-            ):
+            arm.send_joint_target(target)
+            if (plan is None or index >= replan_steps) and fresh_pair.accept(front_ns, wrist_ns):
                 observation = build_force_observation(
                     front,
                     wrist,
                     q,
                     tcp,
-                    float(
-                        float(measured["gripper_position"]) >= GRIPPER_OPEN_THRESHOLD_M
-                    ),
+                    float(float(measured["gripper_width_m"]) >= GRIPPER_OPEN_THRESHOLD_M),
                     prompt,
                     now_ns,
                     steps,
@@ -694,43 +659,39 @@ def run_force_rlt(
     finally:
         if arm is not None:
             try:
-                arm.set_joint_control(arm.state["joint_positions"])
+                arm.send_joint_target(
+                    arm.get_state(required=("joints", "ee", "gripper"))["joint_positions"]
+                )
             except Exception:
                 logger.exception("Failed to hold measured joints")
-        if worker is not None:
-            worker.close()
-        if arm is not None:
-            arm.cleanup()
-        if cameras is not None:
-            cameras.close()
+        try:
+            if worker is not None:
+                worker.close()
+        finally:
+            try:
+                if arm is not None:
+                    arm.close()
+            finally:
+                if cameras is not None:
+                    cameras.close()
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="30 Hz Franka inference without recording"
-    )
-    parser.add_argument(
-        "--robot", default="franka", help="Config name under config/inference/"
-    )
+    parser = argparse.ArgumentParser(description="30 Hz Franka inference without recording")
+    parser.add_argument("--robot", default="franka", help="Config name under config/inference/")
     parser.add_argument("--config", type=Path, help="Override inference YAML config")
     parser.add_argument("--host", help="Override policy server hostname or ws:// URI")
     parser.add_argument("--port", type=int, help="Override policy server port")
     parser.add_argument("--prompt", help="Override task instruction")
-    parser.add_argument(
-        "--max-steps", type=int, help="30 Hz control ticks; 0 runs until Ctrl+C"
-    )
+    parser.add_argument("--max-steps", type=int, help="30 Hz control ticks; 0 runs until Ctrl+C")
     parser.add_argument(
         "--move-to-start",
         action="store_true",
         help="Move to configured start joints first",
     )
     args = parser.parse_args(argv)
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
-    )
-    config = load_mapping(
-        config_path(stage="inference", robot=args.robot, explicit=args.config)
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    config = load_mapping(config_path(stage="inference", robot=args.robot, explicit=args.config))
     try:
         run(
             config,

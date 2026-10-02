@@ -1,0 +1,14 @@
+# ROS parameters. Load inactive; Python explicitly activates for a trajectory.
+controller_manager:
+  ros__parameters:
+    joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+joint_trajectory_controller:
+  ros__parameters:
+    joints: [panda_joint1, panda_joint2, panda_joint3, panda_joint4, panda_joint5, panda_joint6, panda_joint7]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false

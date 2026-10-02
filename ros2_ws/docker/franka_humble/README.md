@@ -4,26 +4,35 @@ The active `Dockerfile.uv` now builds a persistent Panda driver in the image:
 LCAS/franka_arm_ros2 commit `6867bde68970104118d04ae853ddded15bf857fb`
 and libfranka 0.9.2 commit `f3b8d775a9c847cab32684c8a316f67867761674`.
 They are installed under `/opt/panda_ws` and `/opt/panda_libfranka`.
-The entrypoint prefers them over the inherited FR3 driver and does not load
-its incompatible collection overlay. No runtime compilation is required.
+The entrypoint sources the Panda underlay, then the rebuilt project overlay via
+`local_setup.bash`, without importing the inherited FR3 workspace.
+The image applies `patches/panda-control-startup.patch` to seed position commands
+from `q_d` for joints and `O_T_EE_c` for EE motion, matching the first libfranka
+control callback's last commanded pose, and fix state-broadcaster contention.
+No runtime compilation is required after the image and overlay builds.
 The inherited base tag remains 2.5.1; it does not describe the active Panda driver.
 
 From the repository root, after preparing the base image and `.env` below:
 
 ```bash
 bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh build franka_humble
-bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble bash -c 'exec ros2 launch franka_bringup franka.launch.py robot_ip:=$FRANKA_ROBOT_IP load_gripper:=true use_rviz:=false'
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps franka_humble bash ros2_ws/docker/franka_humble/scripts/build_overlay.sh
+bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm --no-deps franka_humble bash -c 'exec ros2 launch data_collect_franka franka_data_collect.launch.py robot_type:=panda robot_ip:="$FRANKA_ROBOT_IP" use_fake_hardware:=false load_gripper:=true start_cameras:=false'
 ```
 
-Enable FCI and unlock brakes in Desk before launch. This verifies bringup;
-`collect.sh` is not yet ported to the Panda driver's older controller interfaces.
+Enable FCI and unlock brakes in Desk before launch. Project bringup loads the
+joint streaming, joint trajectory and EE target controllers inactive; the public
+Python class activates them when needed. Run `tests/docker_arm_connection_test.py`
+through `compose_safe.sh` for measured live motion and cleanup checks.
+`./collect.sh` remains the complete collection entry point with cameras and VR.
 The driver permits a non-RT kernel via `RealtimeConfig::kIgnore` and emits a warning.
 
 ---
 
 # Franka ROS 2 Humble container
 
-This is a headless, Linux-Docker configuration for an FR3-first setup. It pins:
+The inherited base image contains the following FR3 packages; the active Panda
+runtime above overrides them and must not link to these versions:
 
 - `franka_ros2` `v2.5.1` (Humble)
 - `libfranka` `0.20.4` via the official `dependency.repos`
@@ -41,7 +50,7 @@ bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble
 
 1. Refresh the Docker group in a new login shell, or use `sg docker -c '<command>'` for the current shell. Docker was available through `sg docker` when this configuration was created.
 2. Copy `.env.example` to `.env` and verify `FRANKA_ROBOT_IP` in Desk. The copied address comes only from this repository's existing controller default and is **not** a network probe result.
-3. The Humble + `franka_ros2` image `data-collect/franka-ros2-humble:2.5.1` should already exist. Build the thin uv layer (does not recompile Franka):
+3. The Humble + `franka_ros2` image `data-collect/franka-ros2-humble:2.5.1` should already exist. Build the uv layer and pinned Panda driver:
 
    ```bash
    bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh build
@@ -74,7 +83,11 @@ The verification commands above run synthetic inputs, fake hardware, or ICMP onl
 
 ## Fake hardware notes
 
-`cartesian_pose_target_controller` can **load** on fake hardware but **activate** may fail because fake hardware does not provide cartesian pose state. Use `joint_position_target_controller` as the fake fallback. Run `python -m control.franka_ros2_control --use-fake-hardware status` from `/workspace/data_collect`; it should still print 7 joints.
+Optional Panda fake bringup adds Cartesian GPIO interfaces to `GenericSystem`
+and publishes their feedback as the EE pose. This checks ROS wiring, not Panda
+dynamics, inverse kinematics or real-time performance. The adapter test uses
+the same public Python class and requires all arm capabilities; it does not
+accept an unavailable EE controller as a successful test.
 
 ## Recording in the container
 

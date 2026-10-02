@@ -6,7 +6,7 @@ set -euo pipefail
 cd /workspace/data_collect
 
 # The image's own /opt/uv/venv is empty until it is synced from the mounted
-# project. inference.py and vr_hitl_inference.py need websockets and msgpack from
+# project. inference.py and inference_hitl.py need websockets and msgpack from
 # that venv, so a successful sync here is also what proves they can run here.
 uv sync --project "$UV_PROJECT" --locked
 

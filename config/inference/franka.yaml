@@ -1,3 +1,5 @@
+extends: ../common/franka.yaml
+
 # The merged force RLT server uses port 8002; the legacy EE policy can be selected with --port 8001.
 # Force RLT runs in hold/shadow mode until joint execution is explicitly configured.
 policy_server:
@@ -16,29 +18,24 @@ inference:
 
 camera:
   camera_backend: ros
-  external_camera_serial: "825412070292"
-  wrist_camera_serial: "825412070487"
-  external_image_topic: "/external/color/image_raw"
-  wrist_image_topic: "/wrist/color/image_raw"
-  camera_startup_timeout_s: 10.0
   image_hw: 224
-  crop_scale: 0.9
-  camera_fps: 30.0
 
 robot:
   use_fake_hardware: true
-  robot_type: fr3
-  start_joint_position:
-    - 0.00388
-    - -0.45916
-    - -0.15237
-    - -2.47266
-    - -0.06778
-    - 1.96442
-    - 0.70214
 
-gripper:
-  gripper_type: franka
+motion:
+  ee:
+    enabled: true
+    streaming:
+      publish_rate_hz: 30.0
+      limits:
+        max_translation_step_m: 0.03
+        max_rotation_step_rad: 0.15
+  joint:
+    streaming:
+      enabled: true
+  gripper:
+    enabled: true
 
 force_rlt:
   execute_joint_targets: false

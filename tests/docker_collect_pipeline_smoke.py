@@ -24,18 +24,22 @@ from control.vr_input import VRInput
 class FakeArm:
     active: FakeArm | None = None
 
-    def __init__(self, *, start_joint_position, **_kwargs) -> None:
+    def __init__(self, **_kwargs) -> None:
+        motion = _kwargs["motion_config"]
+        assert motion["ee"]["enabled"] and motion["joint"]["streaming"]["enabled"]
+        assert motion["robot"]["use_fake_hardware"] is True
+        assert motion["gripper"]["enabled"] is False
         self.tick = 0
-        self.joints = np.asarray(start_joint_position, dtype=np.float64)
+        self.joints = np.zeros(7, dtype=np.float64)
         self.position = np.array([0.3, 0.0, 0.5], dtype=np.float64)
         self.quaternion = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
         FakeArm.active = self
 
-    @property
-    def state(self) -> dict:
+    def get_state(self, **_kwargs) -> dict:
         return {
             "joint_positions": self.joints.copy(),
             "joint_velocities": np.zeros(7, dtype=np.float64),
+            "end_effector_pose": self.ee_pose_matrix,
         }
 
     @property
@@ -44,22 +48,22 @@ class FakeArm:
         matrix[:3, 3] = self.position
         return matrix
 
-    def move_to_joint_position(self, target) -> None:
+    def move_joints(self, target, **_kwargs) -> None:
         self.joints = np.asarray(target, dtype=np.float64)
 
     def wait_until_stopped(self) -> bool:
         return True
 
-    def start_ee_streaming(self, **_kwargs) -> None:
+    def start_stream(self, space, **_kwargs) -> None:
         pass
 
     def start_joint_streaming(self, **_kwargs) -> None:
         pass
 
-    def stop_ee_streaming(self) -> None:
+    def stop_stream(self) -> None:
         pass
 
-    def set_ee_control(self, position, quaternion, _joints) -> None:
+    def send_ee_target(self, position, quaternion) -> None:
         self.position = np.asarray(position, dtype=np.float64)
         self.quaternion = np.asarray(quaternion, dtype=np.float64)
 
@@ -75,7 +79,13 @@ class FakeArm:
 
         yield Context()
 
-    def cleanup(self) -> None:
+    def connect(self):
+        pass
+
+    def send_joint_target(self, joints):
+        self.joints = np.asarray(joints, dtype=np.float64)
+
+    def close(self) -> None:
         pass
 
 
@@ -133,16 +143,12 @@ def run_case(action_space: str, backend: str) -> None:
 
     with tempfile.TemporaryDirectory(prefix="franka-collect-smoke-") as tmp:
         root = Path(tmp)
-        config = yaml.safe_load(
-            (
-                Path(__file__).resolve().parents[1] / "config/collect/franka.yaml"
-            ).read_text()
-        )
+        from control.robot_config import load_mapping
+
+        config = load_mapping(Path(__file__).resolve().parents[1] / "config/collect/franka.yaml")
         selected_format = "v3" if backend == "jazzy" else "v2"
         config_format = (
-            selected_format
-            if action_space == "ee"
-            else ("v2" if selected_format == "v3" else "v3")
+            selected_format if action_space == "ee" else ("v2" if selected_format == "v3" else "v3")
         )
         config["dataset"].update(
             repo_id="smoke/franka",
@@ -165,6 +171,11 @@ def run_case(action_space: str, backend: str) -> None:
             patch.object(vr_collect, "__file__", str(root / "vr_collect.py")),
             patch.object(vr_collect, "RoboticArmControlerRos", FakeArm),
             patch.object(vr_collect, "VRInputRos", FakeVR),
+            patch.object(
+                vr_collect,
+                "control_loop",
+                lambda **kwargs: FakeArm.active.control_loop(frequency=kwargs["frequency"]),
+            ),
             patch.object(vr_collect, "DualRealsenseManagerRos", FakeCameras),
             patch.object(sys, "argv", argv),
         ):
@@ -173,13 +184,9 @@ def run_case(action_space: str, backend: str) -> None:
         dataset_root = root / "data/smoke/franka_test"
         info = json.loads((dataset_root / "meta/info.json").read_text())
         sync = json.loads((dataset_root / "episode_000000.sync.json").read_text())
-        actions = (
-            (dataset_root / "episode_000000.actions.jsonl").read_text().splitlines()
-        )
+        actions = (dataset_root / "episode_000000.actions.jsonl").read_text().splitlines()
         read_options = {"video_backend": "pyav"} if backend == "jazzy" else {}
-        replay = LeRobotDataset(
-            repo_id="smoke/franka_test", root=dataset_root, **read_options
-        )
+        replay = LeRobotDataset(repo_id="smoke/franka_test", root=dataset_root, **read_options)
         assert info["total_episodes"] == 1, info
         assert len(replay) == sync["video_frames"] > 0
         assert len(actions) == sync["action_records"] > 0
@@ -188,17 +195,11 @@ def run_case(action_space: str, backend: str) -> None:
         assert sync["action_target_offset_frames"] == 1
         assert tuple(replay[0]["ee_pose"].shape) == (6,)
         assert tuple(replay[0]["joint_position"].shape) == (7,)
-        assert tuple(replay[0]["actions"].shape) == (
-            (7,) if action_space == "ee" else (8,)
-        )
-        assert info["features"]["actions"]["shape"] == (
-            [7] if action_space == "ee" else [8]
-        )
+        assert tuple(replay[0]["actions"].shape) == ((7,) if action_space == "ee" else (8,))
+        assert info["features"]["actions"]["shape"] == ([7] if action_space == "ee" else [8])
         next_frame = replay[1]
         expected_arm = (
-            next_frame["ee_pose"]
-            if action_space == "ee"
-            else next_frame["joint_position"]
+            next_frame["ee_pose"] if action_space == "ee" else next_frame["joint_position"]
         )
         np.testing.assert_allclose(replay[0]["actions"][:-1], expected_arm, atol=1e-6)
         np.testing.assert_allclose(

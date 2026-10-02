@@ -22,18 +22,22 @@ class HoldTarget:
     position: np.ndarray
     quaternion_xyzw: np.ndarray
     joints: np.ndarray
+    space: str = "ee"
 
     @classmethod
-    def from_arm(cls, arm: Any) -> HoldTarget:
+    def from_arm(cls, arm: Any, *, space: str = "ee") -> HoldTarget:
         position, quaternion = current_ee_pose(arm)
-        return cls(position, quaternion, current_joint_position(arm).copy())
+        return cls(position, quaternion, current_joint_position(arm).copy(), space)
 
     def refresh(self, arm: Any) -> None:
         self.position, self.quaternion_xyzw = current_ee_pose(arm)
         self.joints = current_joint_position(arm).copy()
 
     def apply(self, arm: Any) -> None:
-        arm.set_ee_control(self.position, self.quaternion_xyzw, self.joints)
+        if self.space == "joint":
+            arm.send_joint_target(self.joints)
+        else:
+            arm.send_ee_target(self.position, self.quaternion_xyzw)
 
 
 class CollectionRobot:
@@ -46,6 +50,7 @@ class CollectionRobot:
         gripper_type: str,
         control_mode: str,
         start_joint_position: Any,
+        motion_config: dict | None = None,
     ) -> None:
         self.arm = arm
         self.vr_mapper = vr_mapper
@@ -53,7 +58,8 @@ class CollectionRobot:
         self.gripper_type = gripper_type
         self.control_mode = control_mode
         self.start_joint_position = start_joint_position
-        self.hold = HoldTarget.from_arm(arm)
+        self.motion_config = motion_config
+        self.hold = HoldTarget.from_arm(arm, space=control_mode)
         self.gripper_state = (
             float(soft_gripper.gripper_open_ratio.reshape(-1)[0])
             if soft_gripper is not None
@@ -68,17 +74,14 @@ class CollectionRobot:
         if (
             command == self.last_gripper_cmd
             or self.gripper_busy
-            or time.time() - self.last_gripper_switch_time
-            < self.gripper_switch_cooldown_s
+            or time.time() - self.last_gripper_switch_time < self.gripper_switch_cooldown_s
         ):
             return False
         self.last_gripper_switch_time = time.time()
         self.gripper_state = 1.0 if command > 0.5 else 0.0
         self.last_gripper_cmd = command
         self.gripper_busy = True
-        threading.Thread(
-            target=self._run_franka_gripper, args=(command,), daemon=True
-        ).start()
+        threading.Thread(target=self._run_franka_gripper, args=(command,), daemon=True).start()
         return True
 
     def _run_franka_gripper(self, command: float) -> None:
@@ -96,12 +99,10 @@ class CollectionRobot:
 
     def reset_to_start(self) -> None:
         self.hold.apply(self.arm)
-        self.arm.stop_ee_streaming()
+        self.arm.stop_stream()
         if self.soft_gripper is not None:
             self.soft_gripper.set_gripper_level(0, wait=True)
-            self.gripper_state = float(
-                self.soft_gripper.gripper_open_ratio.reshape(-1)[0]
-            )
+            self.gripper_state = float(self.soft_gripper.gripper_open_ratio.reshape(-1)[0])
         elif self.gripper_type == "franka":
             self.arm.gripper_open()
             self.gripper_state = 1.0
@@ -109,7 +110,9 @@ class CollectionRobot:
             self.gripper_state = 1.0
         self.last_gripper_cmd = 1.0
         print("[Control] Moving to start position...")
-        move_robot_to_start_pose(self.arm, self.start_joint_position)
+        move_robot_to_start_pose(
+            self.arm, self.start_joint_position, motion_config=self.motion_config
+        )
         start_control_streaming(self.arm, self.control_mode, settle_s=0.0)
         self.hold.refresh(self.arm)
         self.hold.apply(self.arm)

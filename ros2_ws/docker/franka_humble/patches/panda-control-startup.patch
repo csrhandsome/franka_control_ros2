@@ -1,0 +1,132 @@
+diff --git a/franka_hardware/src/franka_hardware_interface.cpp b/franka_hardware/src/franka_hardware_interface.cpp
+index c289b27..08e86b3 100644
+--- a/franka_hardware/src/franka_hardware_interface.cpp
++++ b/franka_hardware/src/franka_hardware_interface.cpp
+@@ -95,10 +95,10 @@ std::vector<CommandInterface> FrankaHardwareInterface::export_command_interfaces
+ 
+ CallbackReturn FrankaHardwareInterface::on_activate(
+     const rclcpp_lifecycle::State& /*previous_state*/) {
+-  robot_->initializeContinuousReading();
+   hw_commands_joint_effort.fill(0);
+   read(rclcpp::Time(0),
+-       rclcpp::Duration(0, 0));  // makes sure that the robot state is properly initialized.
++       rclcpp::Duration(0, 0));
++  robot_->initializeContinuousReading();  // makes sure that the robot state is properly initialized.
+   RCLCPP_INFO(getLogger(), "Started");
+   return CallbackReturn::SUCCESS;
+ }
+@@ -264,6 +264,18 @@ hardware_interface::return_type FrankaHardwareInterface::perform_command_mode_sw
+ 
+   RCLCPP_INFO(this->getLogger(),"Performing command mode switch");
+   std::cout << "Current mode: " << control_mode_ << std::endl;
++  // Seed all position commands before starting libfranka's asynchronous loop.
++  // Controller activation/update occurs only after this hardware switch returns.
++  robot_->stopRobot();
++  const auto initial_state = robot_->read();
++  hw_commands_joint_position = initial_state.q_d;
++  hw_commands_cartesian_position = initial_state.O_T_EE_c;
++  hw_commands_joint_velocity.fill(0.0);
++  hw_commands_cartesian_velocity.fill(0.0);
++  hw_commands_joint_effort.fill(0.0);
++  robot_->write(hw_commands_joint_effort, hw_commands_joint_position,
++                hw_commands_joint_velocity, hw_commands_cartesian_position,
++                hw_commands_cartesian_velocity);
+   if(control_mode_ == ControlMode::None){
+     robot_->stopRobot();
+     robot_->initializeContinuousReading();
+diff --git a/franka_hardware/src/robot.cpp b/franka_hardware/src/robot.cpp
+index 9b7c66e..1f75399 100644
+--- a/franka_hardware/src/robot.cpp
++++ b/franka_hardware/src/robot.cpp
+@@ -79,19 +79,17 @@ void Robot::write(const std::array<double, 7>& efforts,
+ }
+ 
+ franka::RobotState Robot::read() {
+-  std::lock_guard<std::mutex> lock(read_mutex_);
+-  if(hasError() || isStopped()){ // either the robot is in error, or it doesn't have an active control/read loop running
+-    try{
+-      current_state_ = robot_->readOnce();
+-      if(hasError()){
+-        stopRobot();
+-      }
+-    }
+-    catch(franka::InvalidOperationException& e){
+-      std::cout << "Invalid Operation Exception: " << e.what() << std::endl;
+-    }
++  // Never join a control thread while holding the state mutex it needs to exit.
++  if (hasError()) {
++    stopRobot();
+   }
+-  return {current_state_};
++  if (isStopped()) {
++    const auto state = robot_->readOnce();
++    std::lock_guard<std::mutex> lock(read_mutex_);
++    current_state_ = state;
++  }
++  std::lock_guard<std::mutex> lock(read_mutex_);
++  return current_state_;
+ }
+ franka_hardware::Model* Robot::getModel() {
+   return franka_hardware_model_.get();
+@@ -144,12 +142,15 @@ void Robot::initializeJointPositionControl() {
+     try{
+ 
+     robot_->control(
+-      [this](const franka::RobotState& state, const franka::Duration& /*period*/) {
++      [this](const franka::RobotState& state, const franka::Duration& period) {
+         {
+           std::lock_guard<std::mutex> lock(read_mutex_);
+           current_state_ = state;
+         }
+         std::lock_guard<std::mutex> lock(write_mutex_);
++        if (period.toSec() == 0.0) {
++          joint_position_command_ = state.q_d;
++        }
+         franka::JointPositions out(joint_position_command_);
+         out.motion_finished = finish_;
+         return out;
+@@ -224,16 +225,19 @@ void Robot::initializeCartesianPositionControl() {
+   const auto kCartesianPositionControl = [this]() {
+     try{
+       robot_->control(
+-          [this](const franka::RobotState& state, const franka::Duration& /*period*/) {
++          [this](const franka::RobotState& state, const franka::Duration& period) {
+             {
+               std::lock_guard<std::mutex> lock(read_mutex_);
+               current_state_ = state;
+             }
+             std::lock_guard<std::mutex> lock(write_mutex_);
++            if (period.toSec() == 0.0) {
++              cartesian_position_command_ = state.O_T_EE_c;
++            }
+             franka::CartesianPose out(cartesian_position_command_);
+             out.motion_finished = finish_;
+             return out;
+-          });
++          }, franka::ControllerMode::kJointImpedance, true, 10.0);
+       }
+     catch(franka::ControlException& e){
+       std::cout <<  e.what() << std::endl;
+@@ -255,7 +259,7 @@ void Robot::initializeContinuousReading() {
+           current_state_ = state;
+         }
+         if(current_state_.robot_mode == franka::RobotMode::kReflex){
+-          this->has_error_ = true;
++          setError(true);
+           throw franka::ControlException("Reflex!");
+         }
+         return !finish_;
+diff --git a/franka_robot_state_broadcaster/src/franka_robot_state_broadcaster.cpp b/franka_robot_state_broadcaster/src/franka_robot_state_broadcaster.cpp
+index cb246e7..716b34d 100644
+--- a/franka_robot_state_broadcaster/src/franka_robot_state_broadcaster.cpp
++++ b/franka_robot_state_broadcaster/src/franka_robot_state_broadcaster.cpp
+@@ -101,7 +101,8 @@ controller_interface::return_type FrankaRobotStateBroadcaster::update(
+     return controller_interface::return_type::OK;
+ 
+   } else {
+-    return controller_interface::return_type::ERROR;
++    // Publisher contention skips a sample; it is not a hardware failure.
++    return controller_interface::return_type::OK;
+   }
+ }
+ 

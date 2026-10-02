@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from control.util.pose import (
+    as_vector,
     matrix_to_pose6,
     pose6_to_quat_xyzw,
     position_quat_to_pose6,
@@ -27,13 +28,6 @@ __all__ = [
 ]
 
 
-def _as_vector(values: np.ndarray, size: int, name: str) -> np.ndarray:
-    vector = np.asarray(values, dtype=np.float64)
-    if vector.shape != (size,) or not np.isfinite(vector).all():
-        raise ValueError(f"{name} must be a finite {size}D vector")
-    return vector.copy()
-
-
 def _with_gripper(arm_values: np.ndarray, gripper_open: float) -> np.ndarray:
     if not np.isfinite(gripper_open) or not 0.0 <= gripper_open <= 1.0:
         raise ValueError("Logical gripper state must be in 0..1")
@@ -48,8 +42,8 @@ class EEPose:
     rpy_rad: np.ndarray
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "xyz_m", _as_vector(self.xyz_m, 3, "EE xyz"))
-        object.__setattr__(self, "rpy_rad", _as_vector(self.rpy_rad, 3, "EE rpy"))
+        object.__setattr__(self, "xyz_m", as_vector(self.xyz_m, 3, "EE xyz"))
+        object.__setattr__(self, "rpy_rad", as_vector(self.rpy_rad, 3, "EE rpy"))
 
     @property
     def vector(self) -> np.ndarray:
@@ -73,7 +67,7 @@ class EEPose:
 
     @classmethod
     def from_vector(cls, vector: np.ndarray) -> EEPose:
-        pose = _as_vector(vector, 6, "EE pose")
+        pose = as_vector(vector, 6, "EE pose")
         return cls(pose[:3], pose[3:])
 
 
@@ -84,9 +78,7 @@ class JointPose:
     angles_rad: np.ndarray
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "angles_rad", _as_vector(self.angles_rad, 7, "Joint angles")
-        )
+        object.__setattr__(self, "angles_rad", as_vector(self.angles_rad, 7, "Joint angles"))
 
     @property
     def vector(self) -> np.ndarray:

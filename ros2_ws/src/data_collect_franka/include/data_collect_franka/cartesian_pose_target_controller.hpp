@@ -6,7 +6,6 @@
 
 #include <Eigen/Dense>
 #include <controller_interface/controller_interface.hpp>
-#include <franka_semantic_components/franka_cartesian_pose_interface.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 
@@ -28,9 +27,6 @@ class CartesianPoseTargetController : public controller_interface::ControllerInt
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State& previous_state) override;
 
  private:
-  void maybe_set_collision_behavior();
-
-  std::unique_ptr<franka_semantic_components::FrankaCartesianPoseInterface> franka_cartesian_pose_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_sub_;
 
   std::mutex target_mutex_;
@@ -39,10 +35,22 @@ class CartesianPoseTargetController : public controller_interface::ControllerInt
   Eigen::Quaterniond target_orientation_{Eigen::Quaterniond::Identity()};
   Eigen::Vector3d target_position_{Eigen::Vector3d::Zero()};
   bool has_target_{false};
+  Eigen::Vector3d velocity_{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d acceleration_{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d angular_velocity_{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d angular_acceleration_{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d reference_position_{Eigen::Vector3d::Zero()};
+  Eigen::Quaterniond reference_orientation_{Eigen::Quaterniond::Identity()};
 
-  const bool k_elbow_activated_{false};
   double filter_coeff_{0.35};
-  std::string arm_prefix_;
+  double max_translation_velocity_{0.05};
+  double max_rotation_velocity_{0.2};
+  double max_translation_acceleration_{0.1};
+  double max_translation_jerk_{1.0};
+  double max_rotation_acceleration_{0.2};
+  double max_rotation_jerk_{2.0};
+  double smoothing_frequency_{10.0};
+  std::string base_frame_{"panda_link0"};
 };
 
 }  // namespace data_collect_franka

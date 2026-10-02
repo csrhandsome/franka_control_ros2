@@ -11,6 +11,8 @@ import numpy as np
 
 from control.hitl.types import FRONT_IMAGE_KEY, STATE_KEY, WRIST_IMAGE_KEY
 from control.robot_config import parse_control_mode, parse_gripper_type
+from control.motion_config import workflow_motion_config
+from control.util.robot import move_robot_to_start_pose
 from control.robot_config import section as _section
 
 logger = logging.getLogger(__name__)
@@ -80,9 +82,7 @@ class DummyRobotEnv:
     ) -> None:
         self.ee_pos = np.asarray(target_xyz, dtype=np.float64).reshape(3)
         if target_quat_xyzw is not None:
-            self.ee_quat_xyzw = np.asarray(target_quat_xyzw, dtype=np.float64).reshape(
-                4
-            )
+            self.ee_quat_xyzw = np.asarray(target_quat_xyzw, dtype=np.float64).reshape(4)
         self.gripper = 0.0 if gripper_close else 0.08
 
     def close(self) -> None:
@@ -98,6 +98,7 @@ class RosRobotEnv:
         control_mode: str,
         gripper_type: str,
         gripper_cfg: SimpleNamespace,
+        motion_config: dict,
     ) -> None:
         from control.dual_camera_manager_ros import DualRealsenseManagerRos
         from control.robotic_arm_controller_ros import RoboticArmControlerRos
@@ -108,8 +109,11 @@ class RosRobotEnv:
         self.arm = RoboticArmControlerRos(
             use_fake_hardware=bool(robot_cfg.use_fake_hardware),
             robot_type=str(robot_cfg.robot_type),
-            start_joint_position=list(robot_cfg.start_joint_position),
+            motion_config=motion_config,
         )
+        self.arm.connect()
+        self._start_joints = list(robot_cfg.start_joint_position)
+        self._motion_config = motion_config
         backend = str(getattr(camera_cfg, "camera_backend", "none"))
         self.cameras = DualRealsenseManagerRos(
             external_topic=str(camera_cfg.external_image_topic),
@@ -144,26 +148,18 @@ class RosRobotEnv:
                         "/gripper_right/image_raw",
                     )
                 ),
-                enable_cameras=bool(
-                    getattr(gripper_cfg, "enable_soft_gripper_cameras", False)
-                ),
+                enable_cameras=bool(getattr(gripper_cfg, "enable_soft_gripper_cameras", False)),
                 use_fake=bool(getattr(gripper_cfg, "soft_gripper_use_fake", False)),
             )
-            self.soft_gripper.set_force(
-                int(getattr(gripper_cfg, "soft_gripper_force", 50))
-            )
-            self.soft_gripper.set_velocity(
-                int(getattr(gripper_cfg, "soft_gripper_velocity", 100))
-            )
+            self.soft_gripper.set_force(int(getattr(gripper_cfg, "soft_gripper_force", 50)))
+            self.soft_gripper.set_velocity(int(getattr(gripper_cfg, "soft_gripper_velocity", 100)))
 
     def reset(self) -> None:
-        self.arm.move_to_start()
+        self.arm.stop_stream()
+        move_robot_to_start_pose(self.arm, self._start_joints, motion_config=self._motion_config)
         self._open_gripper()
         self._gripper_closed = False
-        if self._control_mode == "ee":
-            self.arm.start_ee_streaming()
-        else:
-            self.arm.start_joint_streaming()
+        self.arm.start_stream(self._control_mode)
 
     def _open_gripper(self) -> None:
         if self.soft_gripper is not None:
@@ -174,9 +170,7 @@ class RosRobotEnv:
     def _set_gripper(self, gripper_close: bool) -> None:
         if gripper_close and not self._gripper_closed:
             if self.soft_gripper is not None:
-                self.soft_gripper.set_gripper_level(
-                    self.soft_gripper.max_gripper_level, wait=False
-                )
+                self.soft_gripper.set_gripper_level(self.soft_gripper.max_gripper_level, wait=False)
             elif self._gripper_type == "franka":
                 self.arm.gripper_close(wait=False)
             self._gripper_closed = True
@@ -185,7 +179,8 @@ class RosRobotEnv:
             self._gripper_closed = False
 
     def _ee_pose(self) -> tuple[np.ndarray, np.ndarray]:
-        return self.arm._current_ee_pose()
+        state = self.arm.get_state(required=("ee",))
+        return state["ee_position"], state["ee_quaternion_xyzw"]
 
     def ee_pose(self) -> tuple[np.ndarray, np.ndarray]:
         pos, quat = self._ee_pose()
@@ -199,14 +194,20 @@ class RosRobotEnv:
             front = blank_image(self._image_size)
         if wrist is None:
             wrist = blank_image(self._image_size)
-        state = self.arm.state
+        state = self.arm.get_state(
+            required=("joints", "ee", "gripper")
+            if self._gripper_type == "franka"
+            else ("joints", "ee")
+        )
         pos, _quat = self._ee_pose()
         return {
             FRONT_IMAGE_KEY: np.asarray(front, dtype=np.uint8),
             WRIST_IMAGE_KEY: np.asarray(wrist, dtype=np.uint8),
             STATE_KEY: state_vector(
                 state["joint_positions"],
-                float(state["gripper_position"]),
+                float(state["gripper_width_m"])
+                if self._gripper_type == "franka"
+                else float(self._gripper_closed is False),
                 pos,
             ),
         }
@@ -220,16 +221,16 @@ class RosRobotEnv:
         _pos, quat = self._ee_pose()
         if target_quat_xyzw is not None:
             quat = np.asarray(target_quat_xyzw, dtype=np.float64).reshape(4)
-        qpos = self.arm.state["joint_positions"]
+        qpos = self.arm.get_state()["joint_positions"]
         if self._control_mode == "ee":
-            self.arm.set_ee_control(target_xyz, quat, qpos)
+            self.arm.send_ee_target(target_xyz, quat)
         else:
-            self.arm.set_ee_control(_pos, quat, qpos)
+            self.arm.send_joint_target(qpos)
         self._set_gripper(gripper_close)
 
     def close(self) -> None:
         with contextlib.suppress(Exception):
-            self.arm.cleanup()
+            self.arm.close()
         with contextlib.suppress(Exception):
             self.cameras.close()
         if self.soft_gripper is not None:
@@ -261,4 +262,5 @@ def make_env(config: dict, *, dry_run: bool) -> RobotEnv:
         control_mode=control_mode,
         gripper_type=gripper_type,
         gripper_cfg=gripper_cfg,
+        motion_config=workflow_motion_config(config, control_mode=control_mode),
     )

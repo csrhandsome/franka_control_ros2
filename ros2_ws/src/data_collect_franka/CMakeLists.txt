@@ -13,7 +13,6 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(controller_interface REQUIRED)
 find_package(franka_msgs REQUIRED)
-find_package(franka_semantic_components REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -37,7 +36,6 @@ target_include_directories(${PROJECT_NAME}
 ament_target_dependencies(${PROJECT_NAME}
   controller_interface
   franka_msgs
-  franka_semantic_components
   geometry_msgs
   hardware_interface
   pluginlib
@@ -60,6 +58,7 @@ install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES data_collect_franka.xml DESTINATION share/${PROJECT_NAME})
 install(
   PROGRAMS
+    scripts/fake_panda_pose.py
     scripts/usb_camera_node.py
     scripts/dh5_gripper_node.py
   DESTINATION lib/${PROJECT_NAME}

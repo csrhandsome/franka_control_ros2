@@ -29,21 +29,13 @@ JointPositionTargetController::state_interface_configuration() const {
 
 controller_interface::return_type JointPositionTargetController::update(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {
-  if (!initialized_) {
-    for (int i = 0; i < kNumJoints; ++i) {
-      command_q_.at(static_cast<size_t>(i)) = state_interfaces_[i].get_value();
-      target_q_.at(static_cast<size_t>(i)) = command_q_.at(static_cast<size_t>(i));
-    }
-    initialized_ = true;
-  }
-
   std::array<double, kNumJoints> target{};
   {
     std::lock_guard<std::mutex> lock(target_mutex_);
     target = has_target_ ? target_q_ : command_q_;
   }
 
-  const double dt = std::max(period.seconds(), 1e-4);
+  const double dt = std::clamp(period.seconds(), 0.0, 0.01);
   const double max_step = std::max(max_joint_velocity_, 0.0) * dt;
   for (int i = 0; i < kNumJoints; ++i) {
     const double error = target.at(static_cast<size_t>(i)) - command_q_.at(static_cast<size_t>(i));
@@ -56,7 +48,7 @@ controller_interface::return_type JointPositionTargetController::update(
 
 CallbackReturn JointPositionTargetController::on_init() {
   auto_declare<std::string>("arm_prefix", "");
-  auto_declare<std::string>("robot_type", "fr3");
+  auto_declare<std::string>("robot_type", "panda");
   auto_declare<double>("max_joint_velocity", 0.8);
   return CallbackReturn::SUCCESS;
 }
@@ -67,14 +59,18 @@ CallbackReturn JointPositionTargetController::on_configure(
   arm_prefix_ = arm_prefix_.empty() ? "" : arm_prefix_ + "_";
   robot_type_ = get_node()->get_parameter("robot_type").as_string();
   if (robot_type_.empty()) {
-    robot_type_ = "fr3";
+    robot_type_ = "panda";
   }
   max_joint_velocity_ = get_node()->get_parameter("max_joint_velocity").as_double();
+  if (!std::isfinite(max_joint_velocity_) || max_joint_velocity_ <= 0.0) {
+    return CallbackReturn::ERROR;
+  }
 
   target_joints_sub_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
       "~/target_joints", rclcpp::SystemDefaultsQoS(),
       [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
-        if (msg->data.size() != static_cast<size_t>(kNumJoints)) {
+        if (msg->data.size() != static_cast<size_t>(kNumJoints) ||
+            !std::all_of(msg->data.begin(), msg->data.end(), [](double q) { return std::isfinite(q); })) {
           RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 2000,
                                "Ignoring joint target with %zu values; expected %d.",
                                msg->data.size(), kNumJoints);
@@ -91,7 +87,17 @@ CallbackReturn JointPositionTargetController::on_configure(
 
 CallbackReturn JointPositionTargetController::on_activate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
-  initialized_ = false;
+  if (state_interfaces_.size() != kNumJoints || command_interfaces_.size() != kNumJoints) {
+    return CallbackReturn::ERROR;
+  }
+  std::lock_guard<std::mutex> lock(target_mutex_);
+  for (int i = 0; i < kNumJoints; ++i) {
+    const double q = state_interfaces_[i].get_value();
+    if (!std::isfinite(q)) {
+      return CallbackReturn::ERROR;
+    }
+    command_q_[i] = target_q_[i] = q;
+  }
   has_target_ = false;
   return CallbackReturn::SUCCESS;
 }

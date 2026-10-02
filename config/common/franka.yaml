@@ -1,0 +1,30 @@
+# Shared workflow configuration for the current Panda robot.
+# Workflow files override these defaults with relative extends paths.
+camera:
+  external_camera_serial: '825412070292'
+  wrist_camera_serial: '825412070487'
+  external_image_topic: /external/color/image_raw
+  wrist_image_topic: /wrist/color/image_raw
+  camera_fps: 30
+  camera_startup_timeout_s: 10.0
+  crop_scale: 0.9
+robot:
+  robot_type: panda
+  start_joint_position:
+  - 0.00388
+  - -0.45916
+  - -0.15237
+  - -2.47266
+  - -0.06778
+  - 1.96442
+  - 0.70214
+gripper:
+  gripper_type: franka
+
+# Normal workflow trajectories, including reset/start positioning.
+# The standalone profile retains its small-motion verification limits.
+motion:
+  limits:
+    max_joint_velocity_rad_s: 0.5
+    max_joint_acceleration_rad_s2: 1.0
+    max_joint_excursion_rad: 3.2

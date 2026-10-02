@@ -1,3 +1,5 @@
+extends: ../common/franka.yaml
+
 # Franka Human in the Loop collection config. Later robots: config/hitl/<robot>.yaml
 # Any compatible policy server can supply actions over the policy WebSocket.
 # Selectors:
@@ -19,14 +21,7 @@ recording:
 
 camera:
   camera_backend: none # ros | none
-  external_camera_serial: "825412070292"
-  wrist_camera_serial: "825412070487"
-  external_image_topic: "/external/color/image_raw"
-  wrist_image_topic: "/wrist/color/image_raw"
-  camera_startup_timeout_s: 10.0
   image_hw: 128
-  crop_scale: 0.9
-  camera_fps: 30
 
 vr:
   # Policy runs by default; hold both VR triggers to take over (same deadman as collection).
@@ -61,18 +56,19 @@ control:
 
 robot:
   use_fake_hardware: true
-  robot_type: fr3
-  start_joint_position:
-    - 0.00388
-    - -0.45916
-    - -0.15237
-    - -2.47266
-    - -0.06778
-    - 1.96442
-    - 0.70214
+
+motion:
+  ee:
+    enabled: true
+    streaming:
+      publish_rate_hz: 100.0
+  joint:
+    streaming:
+      enabled: true
+  gripper:
+    enabled: true
 
 gripper:
-  gripper_type: franka # franka | dh5 | none
   soft_gripper_use_fake: false
   gripper_left_image_topic: "/gripper_left/image_raw"
   gripper_right_image_topic: "/gripper_right/image_raw"

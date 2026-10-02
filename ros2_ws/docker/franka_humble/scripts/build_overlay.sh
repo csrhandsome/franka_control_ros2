@@ -3,7 +3,10 @@
 set -eo pipefail
 
 source /opt/ros/humble/setup.bash
-if [[ -f /opt/franka_ros2_ws/install/setup.bash ]]; then
+if [[ -f /opt/panda_ws/install/setup.bash ]]; then
+  source /opt/panda_ws/install/setup.bash
+  export LD_LIBRARY_PATH="/opt/panda_libfranka/lib:${LD_LIBRARY_PATH:-}"
+elif [[ -f /opt/franka_ros2_ws/install/setup.bash ]]; then
   source /opt/franka_ros2_ws/install/setup.bash
 fi
 
@@ -18,7 +21,8 @@ cd "${overlay_ws}"
 colcon build \
   --symlink-install \
   --base-paths "${src}" \
+  --cmake-clean-cache \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 
 echo "[FrankaROS2] overlay install: ${overlay_ws}/install"
-echo "Source it with: source ${overlay_ws}/install/setup.bash"
+echo "Source it after the Panda underlay with: source ${overlay_ws}/install/local_setup.bash"

@@ -1,0 +1,82 @@
+# Panda Python motion configuration. ROS controller parameters live in the ROS package.
+# Interfaces are available by default; workflows override their motion settings.
+# Timed trajectory limits and online target limits are deliberately separate.
+schema_version: 1
+robot:
+  use_fake_hardware: false
+  quaternion_order: xyzw
+  robot_type: panda
+  joint_names:
+  - panda_joint1
+  - panda_joint2
+  - panda_joint3
+  - panda_joint4
+  - panda_joint5
+  - panda_joint6
+  - panda_joint7
+  base_frame: panda_link0
+ros:
+  controller_manager: /controller_manager
+  state:
+    joint_topic: /joint_states
+    robot_state_topic: /franka_robot_state_broadcaster/robot_state
+    ee_pose_topic: /franka_robot_state_broadcaster/current_pose
+execution:
+  startup_timeout_s: 5.0
+  service_timeout_s: 5.0
+  state_timeout_s: 0.5
+  execution_timeout_s: 30.0
+joint:
+  streaming:
+    controller: joint_position_target_controller
+    target_topic: /joint_position_target_controller/target_joints
+    enabled: true
+    limits:
+      enabled: true
+      max_step_rad: 0.05
+      max_excursion_rad: 2.8
+  trajectory:
+    enabled: true
+    controller: joint_trajectory_controller
+    action: /joint_trajectory_controller/follow_joint_trajectory
+    start_tolerance_rad: 0.01
+  completion:
+    position_tolerance_rad: 0.005
+    velocity_tolerance_rad_s: 0.005
+    settle_time_s: 0.2
+ee:
+  streaming:
+    controller: cartesian_pose_target_controller
+    target_topic: /cartesian_pose_target_controller/target_pose
+    publish_rate_hz: 100.0
+    limits:
+      enabled: true
+      max_translation_step_m: 0.02
+      max_rotation_step_rad: 0.02
+      max_translation_m: 0.9
+      max_rotation_rad: 2.1
+  completion:
+    translation_tolerance_m: 0.002
+    rotation_tolerance_rad: 0.02
+    settle_time_s: 0.2
+  enabled: true
+limits:
+  # Small, slow timed trajectories for standalone motion / trace checks.
+  # Workflow overrides below motion.limits also apply to moving to start.
+  max_joint_velocity_rad_s: 0.05
+  max_joint_acceleration_rad_s2: 0.1
+  max_joint_excursion_rad: 0.05
+  max_ee_velocity_m_s: 0.01
+  max_ee_acceleration_m_s2: 0.02
+  max_ee_angular_velocity_rad_s: 0.05
+  max_ee_angular_acceleration_rad_s2: 0.1
+  max_ee_translation_m: 0.02
+  max_ee_rotation_rad: 0.1
+  enabled: true
+gripper:
+  command_timeout_s: 5.0
+  enabled: true
+  state_topic: /panda_gripper/joint_states
+  move_action: /panda_gripper/move
+  grasp_action: /panda_gripper/grasp
+  stop_service: /panda_gripper/stop
