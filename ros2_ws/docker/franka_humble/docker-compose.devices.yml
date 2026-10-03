@@ -5,8 +5,15 @@ services:
     group_add:
       - video
       - plugdev
-    devices:
-      - /dev/bus/usb:/dev/bus/usb
+    volumes:
+      # Bind the directory so USB nodes created after startup remain visible.
+      # A devices: directory mapping only copies the nodes present at creation.
+      - type: bind
+        source: /dev/bus/usb
+        target: /dev/bus/usb
+        bind:
+          create_host_path: false
+    # compose_devices.sh adds the host's current /dev/video* nodes explicitly.
     device_cgroup_rules:
       - "c 189:* rmw"
       - "c 81:* rmw"

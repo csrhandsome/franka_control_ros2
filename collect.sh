@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the ROS bringup, VR publisher, and recorder with the existing Docker image.
+# Start ROS bringup, VR publisher, and recorder inside Docker or from the host.
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -9,8 +9,9 @@ usage() {
   cat <<'EOF'
 Usage: ./collect.sh [config/collect/franka.yaml]
 
-Starts ROS bringup, VR topics, and vr_collect.py in Docker. Press Ctrl+C to
-stop all three containers. Build the image and overlay once as described in
+Starts ROS bringup, VR topics, and vr_collect.py. On the host, uses Docker
+containers; inside Humble Docker, uses local processes. Press Ctrl+C to stop
+all components. Build the image and overlay once as described in
 README.md before using this command.
 EOF
 }
@@ -36,17 +37,50 @@ fi
 config_relative="${config_path#"$repo_root/"}"
 
 docker_dir="$repo_root/ros2_ws/docker/franka_humble"
-if [[ ! -f "$docker_dir/.env" ]]; then
-  echo "[collect] Create $docker_dir/.env from .env.example first." >&2
-  exit 1
+inside_docker=false
+if [[ -f /.dockerenv ]] || grep -q docker /proc/self/cgroup 2>/dev/null; then
+  inside_docker=true
 fi
-if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-  echo "[collect] Docker is unavailable or this user cannot access the daemon." >&2
-  exit 1
-fi
-if ! docker image inspect data-collect/franka-ros2-humble:2.5.1-uv >/dev/null 2>&1; then
-  echo "[collect] Build the image first: bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh build franka_humble" >&2
-  exit 1
+if [[ "$inside_docker" == true ]]; then
+  if [[ ! -f /opt/ros/humble/setup.bash || ! -x /opt/uv/venv/bin/python ]]; then
+    echo "[collect] Container collection requires the project's Humble image." >&2
+    exit 1
+  fi
+  # ROS setup scripts may reference unset variables.
+  set +u
+  source /opt/ros/humble/setup.bash
+  if [[ -f /opt/panda_ws/install/setup.bash ]]; then
+    source /opt/panda_ws/install/setup.bash
+    export LD_LIBRARY_PATH="/opt/panda_libfranka/lib:${LD_LIBRARY_PATH:-}"
+  elif [[ -f /opt/franka_ros2_ws/install/setup.bash ]]; then
+    source /opt/franka_ros2_ws/install/setup.bash
+  fi
+  if [[ -f /opt/overlay_ws/install/local_setup.bash ]]; then
+    source /opt/overlay_ws/install/local_setup.bash
+  fi
+  set -u
+  export PATH="/opt/uv/venv/bin:$PATH"
+  if [[ -z "${FRANKA_ROBOT_IP:-}" ]]; then
+    echo "[collect] FRANKA_ROBOT_IP is missing; start with the project's Compose wrapper." >&2
+    exit 1
+  fi
+  if ! command -v setsid >/dev/null; then
+    echo "[collect] setsid is required to manage collection processes." >&2
+    exit 1
+  fi
+else
+  if [[ ! -f "$docker_dir/.env" ]]; then
+    echo "[collect] Create $docker_dir/.env from .env.example first." >&2
+    exit 1
+  fi
+  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+    echo "[collect] Docker is unavailable or this user cannot access the daemon." >&2
+    exit 1
+  fi
+  if ! docker image inspect data-collect/franka-ros2-humble:2.5.1-uv >/dev/null 2>&1; then
+    echo "[collect] Build the image first: bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh build franka_humble" >&2
+    exit 1
+  fi
 fi
 
 safe_compose="$docker_dir/scripts/compose_safe.sh"
@@ -54,6 +88,8 @@ device_compose="$docker_dir/scripts/compose_devices.sh"
 dh5_compose="$docker_dir/scripts/compose_dh5.sh"
 config_values="$(mktemp)"
 containers=()
+processes=()
+process_names=()
 
 cleanup() {
   trap - EXIT INT TERM
@@ -62,15 +98,43 @@ cleanup() {
     docker stop --time 5 "${containers[@]}" >/dev/null 2>&1 || true
     docker rm -f "${containers[@]}" >/dev/null 2>&1 || true
   fi
+  if (( ${#processes[@]} )); then
+    echo "[collect] Stopping collection processes..." >&2
+    for pid in "${processes[@]}"; do
+      kill -INT -- "-$pid" 2>/dev/null || true
+    done
+    for (( attempt=0; attempt<50; attempt++ )); do
+      local alive=false
+      for pid in "${processes[@]}"; do
+        if kill -0 -- "-$pid" 2>/dev/null; then alive=true; fi
+      done
+      [[ "$alive" == true ]] || break
+      sleep 0.1
+    done
+    for pid in "${processes[@]}"; do
+      kill -TERM -- "-$pid" 2>/dev/null || true
+    done
+    sleep 1
+    for pid in "${processes[@]}"; do
+      kill -KILL -- "-$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    done
+  fi
   rm -f -- "$config_values"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Parse YAML with the container's Python. The host does not need a .venv.
-bash "$safe_compose" run --rm -T --no-deps franka_humble \
-  python -c '
+# Parse YAML with the container's Python in either environment.
+config_python() {
+  if [[ "$inside_docker" == true ]]; then
+    python "$@"
+  else
+    bash "$safe_compose" run --rm -T --no-deps franka_humble python "$@"
+  fi
+}
+config_python -c '
 import pathlib
 import sys
 from control.robot_config import load_mapping
@@ -151,6 +215,66 @@ if [[ "$logging" == false ]]; then
   echo "[collect] Dataset logging is disabled in the config; this run will not save episodes." >&2
 fi
 
+if [[ "$inside_docker" == true ]]; then
+  start_process() {
+    local name="$1"
+    shift
+    # Background shell jobs inherit ignored SIGINT. Reset it before exec so
+    # Ctrl+C lets ROS and the recorder run their normal shutdown handlers.
+    setsid /opt/uv/venv/bin/python -c '
+import os
+import signal
+import sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])
+' "$@" &
+    processes+=("$!")
+    process_names+=("$name")
+  }
+  start_process ros ros2 launch data_collect_franka franka_data_collect.launch.py \
+    "robot_ip:=$FRANKA_ROBOT_IP" \
+    "robot_type:=$robot_type" "use_fake_hardware:=$fake_hardware" \
+    "load_gripper:=$load_gripper" "start_cameras:=$start_cameras" \
+    "external_serial:=$external_serial" "wrist_serial:=$wrist_serial" \
+    "start_dh5_gripper:=$start_dh5" "dh5_use_fake:=$dh5_fake" \
+    "dh5_port:=$dh5_port" "start_dh5_cameras:=$dh5_cameras"
+  echo "[collect] Waiting for /joint_states from ROS bringup..."
+  start_process readiness timeout 120 ros2 topic echo /joint_states sensor_msgs/msg/JointState --once >/dev/null
+  readiness_pid="${processes[1]}"
+  while kill -0 "$readiness_pid" 2>/dev/null; do
+    if ! kill -0 "${processes[0]}" 2>/dev/null; then
+      echo "[collect] ROS bringup exited before becoming ready." >&2
+      exit 1
+    fi
+    sleep 0.2
+  done
+  wait "$readiness_pid" || {
+    echo "[collect] ROS bringup readiness check failed." >&2
+    exit 1
+  }
+  # The readiness process has finished; only supervise persistent components.
+  unset 'processes[1]' 'process_names[1]'
+  processes=("${processes[@]}")
+  process_names=("${process_names[@]}")
+  start_process vr python -m teleop_xr.ros2 --mode teleop
+  start_process recorder python vr_collect.py --config "$config_relative"
+  echo "[collect] Running inside Humble Docker. Press Ctrl+C to stop all components."
+  while :; do
+    for index in "${!processes[@]}"; do
+      if ! kill -0 "${processes[$index]}" 2>/dev/null; then
+        status=0
+        wait "${processes[$index]}" || status=$?
+        echo "[collect] Process exited: ${process_names[$index]} (status $status)." >&2
+        if [[ "${process_names[$index]}" == recorder && "$status" == 0 ]]; then
+          exit 0
+        fi
+        exit 1
+      fi
+    done
+    sleep 0.2
+  done
+fi
+
 run_id="${UID:-$(id -u)}-$$"
 ros_name="franka-collect-ros-$run_id"
 vr_name="franka-collect-vr-$run_id"
@@ -176,7 +300,7 @@ start_container "$ros_name" "$bringup_compose" bash -c '
 
 echo "[collect] Waiting for /joint_states from ROS bringup..."
 docker exec "$ros_name" bash -c \
-  'source /opt/ros/humble/setup.bash; timeout 120 ros2 topic echo /joint_states --once >/dev/null'
+  'source /opt/ros/humble/setup.bash; timeout 120 ros2 topic echo /joint_states sensor_msgs/msg/JointState --once >/dev/null'
 
 start_container "$vr_name" "$safe_compose" python -m teleop_xr.ros2 --mode teleop
 start_container "$recorder_name" "$safe_compose" python vr_collect.py --config "$config_relative"

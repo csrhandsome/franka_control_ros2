@@ -73,6 +73,29 @@ bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble
    bash ros2_ws/docker/franka_humble/scripts/compose_safe.sh run --rm franka_humble verify-fci-network
    ```
 
+## Camera device access
+
+Use `compose_devices.sh` for cameras. It binds the host USB directory, explicitly
+maps each current `/dev/video*` character device, and adds its host numeric GID
+alongside the image's `video`/`plugdev` groups. `compose_dh5.sh` uses the same
+camera mapping and adds its serial device. No privileged mode or image rebuild
+is required for these runtime mappings.
+
+Connect the cameras before creating the container. USB directory updates are
+visible in a running container, but video mappings are fixed when it is created;
+recreate the camera container through the wrapper after unplugging/reconnecting
+a camera. Restarting an old container does not regenerate its mappings.
+
+From the repository root, check SDK enumeration without starting the robot:
+
+```bash
+bash ros2_ws/docker/franka_humble/scripts/compose_devices.sh run --rm --no-deps -T franka_humble rs-enumerate-devices -s
+```
+
+Run `rs-enumerate-devices` without `-s` to also see each camera's
+`Usb Type Descriptor`. Use the wrapper's generated Compose mapping rather than
+`docker compose run --device`, which is not a supported Compose run option.
+
 ## Current network finding
 
 At configuration time `enp3s0` existed but reported `NO-CARRIER` and had no IPv4 address, so no robot ping, FCI handshake or UDP jitter test was possible. Connect/power the robot/control box and configure the correct static host address on that NIC before step 5. Do not reuse the Wi-Fi route for the robot.

@@ -1,7 +1,17 @@
 # Franka ROS 2 collection and Human in the Loop control
 
 The normal collection command is `./collect.sh`. It manages the ROS bringup,
-VR publisher, and `vr_collect.py` containers together.
+VR publisher, and `vr_collect.py` containers together on the host. Inside the
+Humble Docker container, the same `bash collect.sh` command starts those three
+components as local processes and stops them together on Ctrl+C. Start the
+container with device access when using ROS cameras:
+
+```bash
+bash ros2_ws/docker/franka_humble/scripts/compose_devices.sh run --rm franka_humble bash collect.sh
+```
+
+Use `compose_dh5.sh` instead when the collection configuration uses the DH5
+gripper. The image, ROS overlay, and `.env` must be prepared before either mode.
 
 | Entry point                      | Purpose                                                   | Configuration                  |
 | -------------------------------- | --------------------------------------------------------- | ------------------------------ |
@@ -19,6 +29,16 @@ Run the Docker commands below from the repository root. `compose_safe.sh` is
 the wrapper for clients that only need ROS topics and the project mount;
 `compose_devices.sh` adds USB/video access for camera bringup. Both load the
 project's Compose overlays and `ros2_ws/docker/franka_humble/.env`.
+
+The device wrapper discovers and maps the host's current `/dev/video*` nodes
+and binds `/dev/bus/usb`. Connect both cameras before starting it. After a
+camera is unplugged/reconnected, recreate the camera container through the
+wrapper to refresh video mappings. These runtime settings need no image rebuild.
+Check camera visibility from the repository root with:
+
+```bash
+bash ros2_ws/docker/franka_humble/scripts/compose_devices.sh run --rm --no-deps -T franka_humble rs-enumerate-devices -s
+```
 
 ## Environments and responsibilities
 

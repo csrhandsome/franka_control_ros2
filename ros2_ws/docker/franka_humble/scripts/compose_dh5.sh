@@ -6,15 +6,6 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 config_dir="$(dirname -- "$script_dir")"
 
-exec docker compose \
-  -f "$config_dir/docker-compose.yml" \
-  -f "$config_dir/docker-compose.proxy.yml" \
-  -f "$config_dir/docker-compose.build-host-network.yml" \
-  -f "$config_dir/docker-compose.host-proxy.yml" \
-  -f "$config_dir/docker-compose.runtime-safe.yml" \
-  -f "$config_dir/docker-compose.uv.yml" \
-  -f "$config_dir/docker-compose.overlay.yml" \
-  -f "$config_dir/docker-compose.devices.yml" \
+exec bash "$script_dir/compose_devices.sh" \
   -f "$config_dir/docker-compose.dh5.yml" \
-  --env-file "$config_dir/.env" \
   "$@"

@@ -1,0 +1,1 @@
+bash ros2_ws/docker/franka_humble/scripts/compose_devices.sh run --rm franka_humble bash

@@ -56,4 +56,8 @@ RUN uv venv --python /usr/bin/python3 --system-site-packages /opt/uv/venv \
     && uv sync --locked \
     && grep -q 'include-system-site-packages = true' /opt/uv/venv/pyvenv.cfg
 
+# Install Codex CLI for the non-root runtime user.
+RUN curl -fsSL https://chatgpt.com/codex/install.sh | sh
+ENV PATH="/home/${USERNAME}/.local/bin:${PATH}"
+
 WORKDIR /workspace/data_collect

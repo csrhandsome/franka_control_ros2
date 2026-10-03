@@ -22,8 +22,9 @@ def _camera_node(namespace, serial):
         executable="realsense2_camera_node",
         # The driver publishes below its node name. Keep the topics aligned
         # with config/collect/franka.yaml: /external/color/image_raw and
-        # /wrist/color/image_raw.
+        # /wrist/color/image_raw. Override the driver's default /camera namespace.
         name=namespace,
+        namespace="/",
         parameters=[parameters],
         output="screen",
     )
